@@ -11,7 +11,7 @@ Proposed
 ## Authors
 
 Repository-local implementation proposal based on the current public EEVideo
-specification and the imported upstream Go reference code.
+specification and the public upstream Go reference code.
 
 ## Motivation
 
@@ -31,11 +31,10 @@ the current stream profile implementable.
 
 ## Problem Statement
 
-The current public stream specification in
-`original_source_code/spec-main/spec-main/modules/ROOT/pages/stream.adoc`
-describes packet shapes, but leaves important interoperability behavior
-unspecified. The public Go code also shows that the shipping host path still
-uses a compatibility leader/payload/trailer format with PFNC-style pixel IDs.
+The current public stream specification describes packet shapes, but leaves
+important interoperability behavior unspecified. The public Go code also shows
+that the shipping host path still uses a compatibility
+leader/payload/trailer format with PFNC-style pixel IDs.
 
 That combination creates four practical problems:
 
@@ -113,7 +112,7 @@ For each format, the spec should define:
 - Expected host memory layout
 - Canonical GStreamer caps mapping
 
-Without this, a sender and receiver may agree on “mono” or “RGB” in principle
+Without this, a sender and receiver may agree on "mono" or "RGB" in principle
 but still disagree on the actual byte layout.
 
 ### 4. Define Canonical Caps Mapping for Host Pipelines
@@ -233,17 +232,17 @@ fully native stream protocol.
 
 The following concepts should be added to the specification:
 
-- A “Stream Compatibility Profile v1” section under the stream chapter
-- A “Pixel Format Registry v1” section with numeric IDs and host mappings
-- A “Receiver Conformance Rules” section covering duplicates, gaps, overflow,
+- A "Stream Compatibility Profile v1" section under the stream chapter
+- A "Pixel Format Registry v1" section with numeric IDs and host mappings
+- A "Receiver Conformance Rules" section covering duplicates, gaps, overflow,
   timeout, and trailer handling
-- A “Fixed Stream Parameters” section defining restart-required changes
-- A “Timestamp Semantics” section
-- A “Stream Profile Identification” register or feature definition
+- A "Fixed Stream Parameters" section defining restart-required changes
+- A "Timestamp Semantics" section
+- A "Stream Profile Identification" register or feature definition
 
 ## Backward Compatibility
 
-This proposal is backward-compatible with the currently imported public Go
+This proposal is backward-compatible with the current public Go
 implementation because it mostly codifies behavior already required for that
 code to work.
 

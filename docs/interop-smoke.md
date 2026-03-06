@@ -1,7 +1,6 @@
 # Upstream Interop Smoke Test
 
-This is the manual interoperability check for the imported upstream Go stack in
-`original_source_code/`.
+This is the manual interoperability check for the public upstream Go stack.
 
 ## Goal
 
@@ -11,12 +10,11 @@ stream that the current Go path can display.
 
 ## Preconditions
 
-- `goeevideo` and `eeview` are built locally from:
-  - `original_source_code/goeevideo-main/goeevideo-main`
-  - `original_source_code/eeview-main/eeview-main`
-- The Rust plugin is built and discoverable through `GST_PLUGIN_PATH`.
+- `goeevideo` and `eeview` are cloned and built locally from the public EEVideo
+  upstream repositories
+- The Rust plugin is built and discoverable through `GST_PLUGIN_PATH`
 - Test format is one of the v1-supported uncompressed formats, preferably
-  `GRAY8` or `GRAY16_LE`.
+  `GRAY8` or `GRAY16_LE`
 
 ## Rust Source Against Upstream Device Stream
 
@@ -51,4 +49,3 @@ stream that the current Go path can display.
    - The Go viewer displays the transmitted image stream.
    - The Rust sink reports increasing `frames-sent`.
    - No packetization or caps errors are emitted.
-
