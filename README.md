@@ -1,15 +1,207 @@
 # eevideo
 
-Rust GStreamer plugin workspace for EEVideo-compatible streaming.
+`eevideo` is a Rust workspace for an EEVideo-oriented GStreamer plugin.
 
-This workspace intentionally implements the current public interoperability
-profile exposed by the upstream Go projects:
+The repository provides two elements:
 
-- CoAP/register control remains a future integration seam.
-- Streaming compatibility targets the currently shipped public compatibility wire path.
-- Native EEVideo SoF/Data/EoF packets remain a follow-on phase.
+- `eevideosrc` receives uncompressed frames over UDP and outputs GStreamer video buffers
+- `eevideosink` packetizes uncompressed video buffers and transmits them over UDP
+
+The current focus is a functional host-side MVP built around the existing
+public compatibility stream profile rather than a full native EEVideo transport
+stack.
+
+## Current Scope
+
+Implemented today:
+
+- a Rust protocol crate for the current compatibility packet layout
+- frame assembly, packet anomaly handling, and stream statistics
+- `eevideosrc` and `eevideosink`
+- unit tests and feature-gated GStreamer integration tests
+- Windows and Jetson-oriented build scaffolding
+
+Explicitly out of scope for v1:
+
+- native EEVideo SoF/Data/EoF framing
+- public CoAP/register control integration
+- JPEG transport
+- resend, FEC, or security profiles
+- dynamic mid-stream caps renegotiation
+
+## Workspace Layout
+
+- `crates/eevideo-proto`
+  - compatibility packet parse/serialize logic
+  - pixel-format mapping
+  - frame assembly
+  - stream statistics
+- `crates/gst-plugin-eevideo`
+  - the GStreamer plugin implementation
+  - `eevideosrc`
+  - `eevideosink`
+- `docs/`
+  - implementation profile
+  - interoperability smoke procedure
+  - spec enhancement proposal
+- `cross/jetson-orin`
+  - cross-build notes and container assets
+
+## Supported Formats
+
+The plugin currently supports these uncompressed formats:
+
+- `video/x-raw,format=GRAY8`
+- `video/x-raw,format=GRAY16_LE`
+- `video/x-raw,format=RGB`
+- `video/x-raw,format=UYVY`
+- `video/x-bayer,format=grbg`
+- `video/x-bayer,format=rggb`
+- `video/x-bayer,format=gbrg`
+- `video/x-bayer,format=bggr`
+
+Anything else should be converted upstream with standard elements such as
+`videoconvert` or `bayer2rgb`.
+
+## Compatibility Model
+
+This repository intentionally follows the currently deployed public host-side
+behavior.
+
+That means the active stream profile is:
+
+- leader packet starts a frame
+- payload packets carry contiguous image bytes
+- trailer packet completes a frame
+- width, height, payload type, and pixel format are fixed after the first complete frame
+- incomplete or malformed frames are dropped
 
 See [docs/implementation-profile.md](docs/implementation-profile.md) for the
-normative scope of this repository and
-[docs/interop-smoke.md](docs/interop-smoke.md) for the manual upstream
-interoperability check.
+normative project scope.
+
+## Prerequisites
+
+### Windows
+
+Recommended environment:
+
+- Rust stable with `x86_64-pc-windows-msvc`
+- Visual Studio Build Tools with the C++ workload
+- GStreamer MSVC runtime and development packages, `1.26+`
+- `pkg-config`
+
+Typical environment setup:
+
+```powershell
+$env:PKG_CONFIG_PATH = "C:\gstreamer\1.0\msvc_x86_64\lib\pkgconfig"
+$env:Path = "C:\gstreamer\1.0\msvc_x86_64\bin;$env:Path"
+```
+
+If `pkg-config` has trouble with spaces in `Program Files`, use a no-space
+mirror or junction as a local workaround.
+
+### Linux
+
+Install:
+
+- Rust stable
+- `pkg-config`
+- GStreamer development packages for `gstreamer-1.0` and `gstreamer-base-1.0`
+
+## Build
+
+Debug build:
+
+```sh
+cargo build --workspace
+```
+
+Release build:
+
+```sh
+cargo build --release --workspace
+```
+
+## Test
+
+Run the workspace tests:
+
+```sh
+cargo test --workspace
+```
+
+Run the feature-gated GStreamer integration tests:
+
+```sh
+cargo test -p gst-plugin-eevideo --features gst-tests
+```
+
+## Basic Local Smoke Test
+
+Build the release plugin first:
+
+```sh
+cargo build --release --workspace
+```
+
+Point GStreamer at the built plugin:
+
+```sh
+set GST_PLUGIN_PATH=C:\devel\eevideo\target\release
+```
+
+Receiver:
+
+```sh
+gst-launch-1.0 eevideosrc address=127.0.0.1 port=5000 timeout-ms=2000 ! videoconvert ! autovideosink
+```
+
+Sender:
+
+```sh
+gst-launch-1.0 videotestsrc ! video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! eevideosink host=127.0.0.1 port=5000 mtu=4000
+```
+
+## Webcam Test
+
+Example Windows sender:
+
+```sh
+gst-launch-1.0 ksvideosrc ! videoconvert ! video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! eevideosink host=127.0.0.1 port=5000 mtu=4000
+```
+
+Example receiver:
+
+```sh
+gst-launch-1.0 eevideosrc address=127.0.0.1 port=5000 timeout-ms=2000 ! videoconvert ! fpsdisplaysink sync=false video-sink=d3d11videosink text-overlay=true
+```
+
+## Upstream Interoperability
+
+This repository no longer vendors the upstream EEVideo source trees.
+
+If you want to validate against the public Go tools, clone those upstream
+repositories separately and follow
+[docs/interop-smoke.md](docs/interop-smoke.md).
+
+## Additional Documentation
+
+- [docs/implementation-profile.md](docs/implementation-profile.md)
+- [docs/interop-smoke.md](docs/interop-smoke.md)
+- [docs/spec-enhancement-proposal.md](docs/spec-enhancement-proposal.md)
+
+## Roadmap
+
+Near term:
+
+- harden behavior under loss and reordering outside localhost
+- formalize the compatibility stream profile more clearly
+- improve Jetson cross-build validation
+- preserve a clean seam for future control-plane integration
+
+Later:
+
+- native EEVideo framing
+- device control integration
+- richer timing semantics
+- optional transport resilience features
