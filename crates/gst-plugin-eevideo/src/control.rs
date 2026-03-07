@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use eevideo_proto::{PayloadType, PixelFormat, StreamProfileId};
 
+// Internal seam for future transport-to-control integration.
+// This crate still exposes no public device-control API in v1.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StreamFormatDescriptor {
+pub(crate) struct StreamFormatDescriptor {
     pub payload_type: PayloadType,
     pub pixel_format: PixelFormat,
     pub width: u32,
@@ -11,7 +13,7 @@ pub struct StreamFormatDescriptor {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StreamConfiguration {
+pub(crate) struct StreamConfiguration {
     pub stream_name: String,
     pub profile: StreamProfileId,
     pub destination_host: String,
@@ -23,20 +25,20 @@ pub struct StreamConfiguration {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ControlCommand {
+pub(crate) enum ControlCommand {
     Configure(StreamConfiguration),
     Start { stream_name: String },
     Stop { stream_name: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ControlError {
+pub(crate) struct ControlError {
     message: String,
 }
 
 impl ControlError {
     #[allow(dead_code)]
-    pub fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
         }
@@ -51,14 +53,14 @@ impl std::fmt::Display for ControlError {
 
 impl std::error::Error for ControlError {}
 
-pub trait ControlBackend: Send + Sync + 'static {
+pub(crate) trait ControlBackend: Send + Sync + 'static {
     fn apply(&self, command: ControlCommand) -> Result<(), ControlError>;
 }
 
-pub type SharedControlBackend = Arc<dyn ControlBackend>;
+pub(crate) type SharedControlBackend = Arc<dyn ControlBackend>;
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct NoopControlBackend;
+struct NoopControlBackend;
 
 impl ControlBackend for NoopControlBackend {
     fn apply(&self, _command: ControlCommand) -> Result<(), ControlError> {
@@ -66,12 +68,12 @@ impl ControlBackend for NoopControlBackend {
     }
 }
 
-pub fn default_control_backend() -> SharedControlBackend {
+pub(crate) fn default_control_backend() -> SharedControlBackend {
     Arc::new(NoopControlBackend)
 }
 
 #[derive(Clone)]
-pub struct ControlSession {
+pub(crate) struct ControlSession {
     backend: SharedControlBackend,
     config: StreamConfiguration,
     configured: bool,
@@ -79,7 +81,7 @@ pub struct ControlSession {
 }
 
 impl ControlSession {
-    pub fn new(backend: SharedControlBackend, config: StreamConfiguration) -> Self {
+    pub(crate) fn new(backend: SharedControlBackend, config: StreamConfiguration) -> Self {
         Self {
             backend,
             config,
@@ -88,7 +90,7 @@ impl ControlSession {
         }
     }
 
-    pub fn configure(&mut self, config: StreamConfiguration) -> Result<(), ControlError> {
+    pub(crate) fn configure(&mut self, config: StreamConfiguration) -> Result<(), ControlError> {
         if self.configured && self.config == config {
             return Ok(());
         }
@@ -99,7 +101,7 @@ impl ControlSession {
         Ok(())
     }
 
-    pub fn start(&mut self) -> Result<(), ControlError> {
+    pub(crate) fn start(&mut self) -> Result<(), ControlError> {
         if !self.configured {
             self.configure(self.config.clone())?;
         }
@@ -115,7 +117,7 @@ impl ControlSession {
         Ok(())
     }
 
-    pub fn stop(&mut self) -> Result<(), ControlError> {
+    pub(crate) fn stop(&mut self) -> Result<(), ControlError> {
         if !self.started {
             return Ok(());
         }

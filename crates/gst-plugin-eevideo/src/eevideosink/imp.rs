@@ -58,6 +58,7 @@ struct RunningState {
     packetizer: CompatPacketizer,
     packet_scratch: Vec<u8>,
     packet_delay_ns: u64,
+    // Internal transport lifecycle seam. The default backend is intentionally no-op in v1.
     control_session: ControlSession,
     control_template: StreamConfiguration,
 }
