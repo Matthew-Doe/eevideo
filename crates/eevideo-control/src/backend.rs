@@ -318,6 +318,11 @@ impl ControlConnection for CoapRegisterConnection {
         let stream_prefix = self.resolve_stream_prefix(&request.stream_name)?;
         let client = self.register_client(Some(&request.bind_address));
         self.write_stream_configuration(&client, &stream_prefix, &request)?;
+        let applied_format = if request.format.is_some() {
+            request.format.clone()
+        } else {
+            read_stream_format(&client, &self.device, &stream_prefix)?
+        };
 
         let applied = AppliedStreamConfiguration {
             stream_id: format!("{}#{stream_prefix}", self.endpoint.uri),
@@ -328,7 +333,7 @@ impl ControlConnection for CoapRegisterConnection {
             bind_address: request.bind_address.clone(),
             packet_delay_ns: request.packet_delay_ns,
             max_packet_size: request.max_packet_size,
-            format: request.format.clone(),
+            format: applied_format,
             normalized: false,
         };
 
@@ -678,8 +683,58 @@ fn apply_format_registers(
     Ok(())
 }
 
+fn read_stream_format(
+    client: &RegisterClient,
+    device: &DeviceConfig,
+    prefix: &str,
+) -> Result<Option<StreamFormatDescriptor>, ControlError> {
+    let width = read_register_field(client, device, &register_name(prefix, "PixelsPerLine"), "ppl")?;
+    let height =
+        read_register_field(client, device, &register_name(prefix, "LinesPerFrame"), "lpf")?;
+    let pixel_format_bits =
+        read_register_field(client, device, &register_name(prefix, "PixelFormat"), "bpp")?;
+
+    if width == 0 || height == 0 || pixel_format_bits == 0 {
+        return Ok(None);
+    }
+
+    let pixel_format = pixel_format_from_device(pixel_format_bits).ok_or_else(|| {
+        ControlError::new(
+            ControlErrorKind::InvalidConfiguration,
+            format!("device reported unsupported pixel format value 0x{pixel_format_bits:08x}"),
+        )
+    })?;
+
+    Ok(Some(StreamFormatDescriptor {
+        payload_type: eevideo_proto::PayloadType::Image,
+        pixel_format,
+        width,
+        height,
+    }))
+}
+
 fn register_name(prefix: &str, suffix: &str) -> String {
     format!("{prefix}_{suffix}")
+}
+
+fn read_register_field(
+    client: &RegisterClient,
+    device: &DeviceConfig,
+    register_name: &str,
+    field_name: &str,
+) -> Result<u32, ControlError> {
+    let register = device
+        .registers
+        .get(register_name)
+        .ok_or_else(|| unknown_register(register_name))?;
+    let value = client.read_u32(register.addr).map_err(register_error)?;
+    let definition = register.fields.get(field_name).ok_or_else(|| {
+        ControlError::new(
+            ControlErrorKind::InvalidConfiguration,
+            format!("register {register_name} does not define field {field_name}"),
+        )
+    })?;
+    extract_field(value, definition)
 }
 
 fn write_register_u32(
@@ -776,6 +831,23 @@ fn write_register_fields(
 fn extract_field(value: u32, definition: &FeatureFieldDefinition) -> Result<u32, ControlError> {
     let (shift, mask) = field_mask(definition)?;
     Ok((value >> shift) & mask)
+}
+
+fn pixel_format_from_device(value: u32) -> Option<PixelFormat> {
+    PixelFormat::from_pfnc(value).ok().or_else(|| {
+        [
+            PixelFormat::Mono8,
+            PixelFormat::Mono16,
+            PixelFormat::BayerGr8,
+            PixelFormat::BayerRg8,
+            PixelFormat::BayerGb8,
+            PixelFormat::BayerBg8,
+            PixelFormat::Rgb8,
+            PixelFormat::Uyvy,
+        ]
+        .into_iter()
+        .find(|format| format.pfnc() & 0xffff == value)
+    })
 }
 
 fn field_mask(definition: &FeatureFieldDefinition) -> Result<(u32, u32), ControlError> {

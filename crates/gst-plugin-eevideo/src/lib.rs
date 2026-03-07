@@ -18,6 +18,25 @@ pub fn register_static() -> Result<(), glib::BoolError> {
     Ok(())
 }
 
+#[cfg(feature = "gst-tests")]
+pub fn configure_source_control_for_tests(
+    element: &gst::Element,
+    backend: eevideo_control::SharedControlBackend,
+    target: eevideo_control::ControlTarget,
+    stream_name: impl Into<String>,
+) -> Result<(), glib::BoolError> {
+    use glib::subclass::types::ObjectSubclassIsExt;
+    use gst::prelude::Cast;
+
+    let src = element
+        .clone()
+        .downcast::<eevideosrc::EeVideoSrc>()
+        .map_err(|_| glib::bool_error!("expected an eevideosrc element"))?;
+    src.imp()
+        .configure_control_for_tests(backend, target, stream_name.into());
+    Ok(())
+}
+
 gst::plugin_define!(
     eevideo,
     env!("CARGO_PKG_DESCRIPTION"),
@@ -29,4 +48,3 @@ gst::plugin_define!(
     env!("CARGO_PKG_REPOSITORY"),
     "2026-03-05"
 );
-
