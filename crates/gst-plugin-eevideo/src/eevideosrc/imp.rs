@@ -7,7 +7,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use eevideo_proto::{
-    CompatPacketView, FrameAssembler, FrameEvent, StreamStats, VideoFrame, SUPPORTED_CAPS,
+    CompatPacketView, FrameAssembler, FrameEvent, PayloadType, StreamProfileId, StreamStats,
+    VideoFrame, SUPPORTED_CAPS,
 };
 use gst::glib;
 use gst::prelude::*;
@@ -21,6 +22,10 @@ use once_cell::sync::Lazy;
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::common::FrameFormat;
+use crate::control::{
+    default_control_backend, default_control_target, ControlSession, ControlTarget,
+    SharedControlBackend, StreamConfiguration, StreamFormatDescriptor,
+};
 
 #[derive(Clone, Debug)]
 struct Settings {
@@ -52,15 +57,36 @@ enum ReceiverEvent {
     Error(String),
 }
 
+#[derive(Clone)]
+struct ManagedControlSettings {
+    enabled: bool,
+    backend: SharedControlBackend,
+    target: ControlTarget,
+    stream_name: String,
+}
+
+impl Default for ManagedControlSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            backend: default_control_backend(),
+            target: default_control_target("stream0"),
+            stream_name: "stream0".to_string(),
+        }
+    }
+}
+
 struct RunningState {
     stop: Arc<AtomicBool>,
     receiver: Arc<Mutex<Receiver<ReceiverEvent>>>,
     join: Option<JoinHandle<()>>,
     negotiated_format: Option<FrameFormat>,
+    control_session: Option<ControlSession>,
 }
 
 pub struct EeVideoSrc {
     settings: Mutex<Settings>,
+    control: Mutex<ManagedControlSettings>,
     state: Mutex<Option<RunningState>>,
     stats: Arc<StreamStats>,
     unlocked: AtomicBool,
@@ -70,10 +96,29 @@ impl Default for EeVideoSrc {
     fn default() -> Self {
         Self {
             settings: Mutex::new(Settings::default()),
+            control: Mutex::new(ManagedControlSettings::default()),
             state: Mutex::new(None),
             stats: Arc::new(StreamStats::default()),
             unlocked: AtomicBool::new(false),
         }
+    }
+}
+
+impl EeVideoSrc {
+    #[cfg(feature = "gst-tests")]
+    pub(crate) fn configure_control_for_tests(
+        &self,
+        backend: SharedControlBackend,
+        target: ControlTarget,
+        stream_name: String,
+    ) {
+        let mut control = self.control.lock().expect("control lock poisoned");
+        *control = ManagedControlSettings {
+            enabled: true,
+            backend,
+            target,
+            stream_name,
+        };
     }
 }
 
@@ -257,6 +302,7 @@ impl BaseSrcImpl for EeVideoSrc {
             .lock()
             .expect("settings lock poisoned")
             .clone();
+        let control = self.control.lock().expect("control lock poisoned").clone();
         let socket = create_receiver_socket(&settings).map_err(|err| {
             if settings.multicast_group.is_empty() {
                 gst::error_msg!(
@@ -289,6 +335,52 @@ impl BaseSrcImpl for EeVideoSrc {
                     ["failed to set read timeout: {}", err]
                 )
             })?;
+        let local_addr = socket.local_addr().map_err(|err| {
+            gst::error_msg!(
+                gst::ResourceError::OpenRead,
+                ["failed to inspect local receive socket address: {}", err]
+            )
+        })?;
+
+        let mut control_session = None;
+        let mut expected_format = None;
+        if control.enabled {
+            let control_request = build_stream_configuration(&settings, local_addr, &control.stream_name)
+                .map_err(|err| {
+                    gst::error_msg!(
+                        gst::ResourceError::Settings,
+                        ["failed to build managed control request: {}", err]
+                    )
+                })?;
+            let mut session =
+                ControlSession::new(Arc::clone(&control.backend), control.target.clone(), control_request.clone());
+            session.describe().map_err(|err| {
+                gst::error_msg!(
+                    gst::ResourceError::Settings,
+                    ["failed to describe control target: {}", err]
+                )
+            })?;
+            let applied = session.configure(control_request).map_err(|err| {
+                gst::error_msg!(
+                    gst::ResourceError::Settings,
+                    ["failed to configure remote stream: {}", err]
+                )
+            })?;
+            if applied.profile != StreamProfileId::CompatibilityV1 {
+                return Err(gst::error_msg!(
+                    gst::ResourceError::Settings,
+                    ["managed control applied unsupported profile {:?}", applied.profile]
+                ));
+            }
+            expected_format = applied.format.clone();
+            session.start().map_err(|err| {
+                gst::error_msg!(
+                    gst::ResourceError::Settings,
+                    ["failed to start remote stream: {}", err]
+                )
+            })?;
+            control_session = Some(session);
+        }
 
         let (sender, receiver) = mpsc::sync_channel(8);
         let stop = Arc::new(AtomicBool::new(false));
@@ -299,6 +391,7 @@ impl BaseSrcImpl for EeVideoSrc {
             stop.clone(),
             stats,
             sender,
+            expected_format,
         ));
 
         let mut state = self.state.lock().expect("state lock poisoned");
@@ -307,6 +400,7 @@ impl BaseSrcImpl for EeVideoSrc {
             receiver: Arc::new(Mutex::new(receiver)),
             join,
             negotiated_format: None,
+            control_session,
         });
 
         Ok(())
@@ -315,6 +409,10 @@ impl BaseSrcImpl for EeVideoSrc {
     fn stop(&self) -> Result<(), gst::ErrorMessage> {
         if let Some(mut state) = self.state.lock().expect("state lock poisoned").take() {
             state.stop.store(true, Ordering::Relaxed);
+            if let Some(control_session) = state.control_session.as_mut() {
+                let _ = control_session.stop();
+                let _ = control_session.disconnect();
+            }
             if let Some(join) = state.join.take() {
                 let _ = join.join();
             }
@@ -409,6 +507,7 @@ fn spawn_receiver_thread(
     stop: Arc<AtomicBool>,
     stats: Arc<StreamStats>,
     sender: SyncSender<ReceiverEvent>,
+    expected_format: Option<StreamFormatDescriptor>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         let mut assembler = FrameAssembler::new(Duration::from_millis(settings.timeout_ms));
@@ -430,6 +529,17 @@ fn spawn_receiver_thread(
 
                     match assembler.ingest_view(packet, now, &stats) {
                         Ok(Some(FrameEvent::Complete(frame))) => {
+                            if let Some(expected) = expected_format.as_ref() {
+                                if !frame_matches_expected_format(&frame, expected) {
+                                    stats.record_drop();
+                                    stats.record_packet_anomaly();
+                                    let _ = sender.try_send(ReceiverEvent::Error(
+                                        "managed-control format mismatch rejected".to_string(),
+                                    ));
+                                    break;
+                                }
+                            }
+
                             let format = FrameFormat::from_frame(&frame);
                             if let Some(existing) = current_format {
                                 if existing != format {
@@ -561,10 +671,62 @@ fn parse_multicast_iface(value: &str) -> io::Result<Option<Ipv4Addr>> {
     Ok(Some(address))
 }
 
+fn build_stream_configuration(
+    settings: &Settings,
+    local_addr: SocketAddr,
+    stream_name: &str,
+) -> io::Result<StreamConfiguration> {
+    let destination_host = match local_addr.ip() {
+        IpAddr::V4(ip) if !ip.is_unspecified() => ip.to_string(),
+        IpAddr::V6(ip) if !ip.is_unspecified() => ip.to_string(),
+        _ if !settings.multicast_iface.trim().is_empty() => settings.multicast_iface.clone(),
+        _ if !settings.address.trim().is_empty() => settings.address.clone(),
+        _ => {
+            return Err(io::Error::new(
+                ErrorKind::AddrNotAvailable,
+                "managed control requires a concrete local receive address",
+            ))
+        }
+    };
+
+    if destination_host == "0.0.0.0" || destination_host == "::" {
+        return Err(io::Error::new(
+            ErrorKind::AddrNotAvailable,
+            "managed control cannot advertise an unspecified destination address",
+        ));
+    }
+
+    Ok(StreamConfiguration {
+        stream_name: stream_name.to_string(),
+        profile: StreamProfileId::CompatibilityV1,
+        destination_host,
+        port: local_addr.port(),
+        bind_address: settings.address.clone(),
+        packet_delay_ns: 0,
+        max_packet_size: 1200,
+        format: None,
+    })
+}
+
+fn frame_matches_expected_format(
+    frame: &VideoFrame,
+    expected: &StreamFormatDescriptor,
+) -> bool {
+    frame.payload_type == PayloadType::Image
+        && frame.payload_type == expected.payload_type
+        && frame.pixel_format == expected.pixel_format
+        && frame.width == expected.width
+        && frame.height == expected.height
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{parse_multicast_group, parse_multicast_iface};
-    use std::net::Ipv4Addr;
+    use super::{
+        build_stream_configuration, frame_matches_expected_format, parse_multicast_group,
+        parse_multicast_iface, Settings,
+    };
+    use eevideo_proto::{PayloadType, PixelFormat, StreamProfileId, VideoFrame};
+    use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
     fn accepts_empty_multicast_group() {
@@ -595,5 +757,46 @@ mod tests {
             parse_multicast_iface("192.168.1.20").unwrap(),
             Some(Ipv4Addr::new(192, 168, 1, 20))
         );
+    }
+
+    #[test]
+    fn builds_managed_control_request_from_bound_address() {
+        let settings = Settings {
+            address: "127.0.0.1".to_string(),
+            ..Settings::default()
+        };
+
+        let request = build_stream_configuration(
+            &settings,
+            SocketAddr::from(([127, 0, 0, 1], 5000)),
+            "stream0",
+        )
+        .unwrap();
+
+        assert_eq!(request.stream_name, "stream0");
+        assert_eq!(request.profile, StreamProfileId::CompatibilityV1);
+        assert_eq!(request.destination_host, "127.0.0.1");
+        assert_eq!(request.port, 5000);
+    }
+
+    #[test]
+    fn detects_managed_control_format_mismatches() {
+        let frame = VideoFrame {
+            frame_id: 1,
+            timestamp: 0,
+            width: 64,
+            height: 32,
+            pixel_format: PixelFormat::Mono8,
+            payload_type: PayloadType::Image,
+            data: vec![0; 64 * 32],
+        };
+        let expected = super::StreamFormatDescriptor {
+            payload_type: PayloadType::Image,
+            pixel_format: PixelFormat::Mono16,
+            width: 64,
+            height: 32,
+        };
+
+        assert!(!frame_matches_expected_format(&frame, &expected));
     }
 }
