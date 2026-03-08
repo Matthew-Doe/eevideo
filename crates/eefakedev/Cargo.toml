@@ -11,6 +11,8 @@ description = "Fake EEVideo device daemon with a pure-Rust test-pattern source"
 anyhow.workspace = true
 clap.workspace = true
 ctrlc.workspace = true
-eevideo-control = { path = "../eevideo-control" }
+eevideo-device = { path = "../eevideo-device" }
 eevideo-proto = { path = "../eevideo-proto" }
-if-addrs = "0.13"
+
+[dev-dependencies]
+eevideo-control = { path = "../eevideo-control" }
