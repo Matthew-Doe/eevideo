@@ -1,13 +1,18 @@
 use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::OnceLock;
+use std::time::Instant;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use eevideo_device::{
     CaptureBackend, CaptureConfiguration, DeviceRuntime, DeviceRuntimeConfig,
     SyntheticCaptureBackend, SyntheticCaptureConfig,
 };
 use eevideo_proto::{PixelFormat, VideoFrame};
+use gst::prelude::*;
+use gstreamer as gst;
+use gstreamer_app as gst_app;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum InputKind {
@@ -118,7 +123,7 @@ impl DeviceDaemon {
                 SyntheticCaptureBackend::new(SyntheticCaptureConfig::default()),
             )?,
             InputKind::Argus => {
-                DeviceRuntime::spawn(config.runtime_config(), StubArgusCaptureBackend::new(config.sensor_id))?
+                DeviceRuntime::spawn(config.runtime_config(), ArgusCaptureBackend::new(config.sensor_id))?
             }
         };
         Ok(Self { runtime })
@@ -178,48 +183,193 @@ fn validate_config(config: &DeviceDaemonConfig) -> Result<()> {
     Ok(())
 }
 
+static GST_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+
 #[derive(Debug)]
-struct StubArgusCaptureBackend {
-    sensor_id: u32,
+struct ArgusCaptureState {
+    pipeline: gst::Pipeline,
+    sink: gst_app::AppSink,
+    started_at: Instant,
+    next_frame_id: u32,
+    current_format: CaptureConfiguration,
 }
 
-impl StubArgusCaptureBackend {
+#[derive(Debug)]
+struct ArgusCaptureBackend {
+    sensor_id: u32,
+    state: Option<ArgusCaptureState>,
+}
+
+impl ArgusCaptureBackend {
     fn new(sensor_id: u32) -> Self {
-        Self { sensor_id }
+        Self {
+            sensor_id,
+            state: None,
+        }
     }
 }
 
-impl CaptureBackend for StubArgusCaptureBackend {
-    fn start_capture(&mut self, _config: CaptureConfiguration) -> Result<()> {
-        bail!(
-            "Argus capture backend for sensor {} is not implemented in this build",
-            self.sensor_id
-        );
+impl CaptureBackend for ArgusCaptureBackend {
+    fn start_capture(&mut self, config: CaptureConfiguration) -> Result<()> {
+        ensure_gstreamer_init()?;
+        validate_argus_capture_config(&config)?;
+        if self.state.is_some() {
+            self.stop_capture()?;
+        }
+
+        let description = build_argus_pipeline_description(self.sensor_id, &config);
+        let element = gst::parse::launch(&description)
+            .with_context(|| format!("failed to build Argus pipeline: {description}"))?;
+        let pipeline = element
+            .downcast::<gst::Pipeline>()
+            .map_err(|_| anyhow!("Argus pipeline description did not produce a gst::Pipeline"))?;
+        let sink = pipeline
+            .by_name("framesink")
+            .ok_or_else(|| anyhow!("Argus pipeline does not expose framesink appsink"))?
+            .downcast::<gst_app::AppSink>()
+            .map_err(|_| anyhow!("Argus framesink element is not an appsink"))?;
+
+        pipeline
+            .set_state(gst::State::Playing)
+            .context("failed to start Argus pipeline")?;
+        self.state = Some(ArgusCaptureState {
+            pipeline,
+            sink,
+            started_at: Instant::now(),
+            next_frame_id: 1,
+            current_format: config,
+        });
+        Ok(())
     }
 
     fn stop_capture(&mut self) -> Result<()> {
+        if let Some(state) = self.state.take() {
+            state
+                .pipeline
+                .set_state(gst::State::Null)
+                .context("failed to stop Argus pipeline")?;
+        }
         Ok(())
     }
 
     fn next_frame(&mut self) -> Result<VideoFrame> {
-        bail!(
-            "Argus capture backend for sensor {} is not implemented in this build",
-            self.sensor_id
-        );
+        let state = self
+            .state
+            .as_mut()
+            .ok_or_else(|| anyhow!("Argus capture is not running"))?;
+        let sample = state
+            .sink
+            .try_pull_sample(gst::ClockTime::from_mseconds(200))
+            .ok_or_else(|| anyhow!("timed out waiting for an Argus frame"))?;
+        let buffer = sample
+            .buffer_owned()
+            .ok_or_else(|| anyhow!("Argus sample did not include a buffer"))?;
+        let map = buffer
+            .map_readable()
+            .map_err(|_| anyhow!("failed to map Argus sample buffer"))?;
+        let expected_len = state
+            .current_format
+            .pixel_format
+            .payload_len(state.current_format.width, state.current_format.height)
+            .context("invalid Argus capture format")?;
+        if map.as_slice().len() != expected_len {
+            bail!(
+                "Argus frame payload length mismatch: expected {expected_len}, got {}",
+                map.as_slice().len()
+            );
+        }
+
+        let frame_id = state.next_frame_id;
+        state.next_frame_id = state.next_frame_id.wrapping_add(1).max(1);
+        let timestamp = buffer
+            .pts()
+            .map(|pts| pts.nseconds())
+            .unwrap_or_else(|| {
+                state
+                    .started_at
+                    .elapsed()
+                    .as_nanos()
+                    .min(u128::from(u64::MAX)) as u64
+            });
+
+        Ok(VideoFrame {
+            frame_id,
+            timestamp,
+            width: state.current_format.width,
+            height: state.current_format.height,
+            pixel_format: state.current_format.pixel_format,
+            payload_type: eevideo_proto::PayloadType::Image,
+            data: map.as_slice().to_vec(),
+        })
     }
 
     fn current_format(&self) -> Option<CaptureConfiguration> {
-        None
+        self.state.as_ref().map(|state| state.current_format.clone())
     }
+}
+
+fn ensure_gstreamer_init() -> Result<()> {
+    GST_INIT
+        .get_or_init(|| gst::init().map_err(|err| err.to_string()))
+        .clone()
+        .map_err(anyhow::Error::msg)
+}
+
+fn validate_argus_capture_config(config: &CaptureConfiguration) -> Result<()> {
+    if config.pixel_format != PixelFormat::Uyvy {
+        bail!("Argus capture backend only supports UYVY output");
+    }
+    if config.width % 2 != 0 {
+        bail!("Argus UYVY output width must be even");
+    }
+    Ok(())
+}
+
+fn build_argus_pipeline_description(sensor_id: u32, config: &CaptureConfiguration) -> String {
+    format!(
+        concat!(
+            "nvarguscamerasrc sensor-id={sensor_id} ! ",
+            "video/x-raw(memory:NVMM),width={width},height={height},framerate={fps}/1 ! ",
+            "nvvidconv ! ",
+            "video/x-raw,format=UYVY,width={width},height={height} ! ",
+            "appsink name=framesink sync=false max-buffers=1 drop=true"
+        ),
+        sensor_id = sensor_id,
+        width = config.width,
+        height = config.height,
+        fps = config.fps,
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DeviceDaemon, DeviceDaemonConfig, InputKind};
+    use super::{
+        build_argus_pipeline_description, CaptureConfiguration, DeviceDaemon, DeviceDaemonConfig,
+        InputKind,
+    };
     use eevideo_control::backend::{CoapRegisterBackend, CoapRegisterBackendConfig};
     use eevideo_control::{ControlBackend, ControlTarget, ControlTransportKind, RequestedStreamConfiguration};
     use eevideo_proto::{PayloadType, PixelFormat, StreamProfileId};
     use std::time::Duration;
+
+    #[test]
+    fn argus_pipeline_description_uses_expected_elements() {
+        let description = build_argus_pipeline_description(
+            2,
+            &CaptureConfiguration {
+                width: 1280,
+                height: 720,
+                pixel_format: PixelFormat::Uyvy,
+                fps: 30,
+            },
+        );
+
+        assert!(description.contains("nvarguscamerasrc sensor-id=2"));
+        assert!(description.contains("video/x-raw(memory:NVMM),width=1280,height=720,framerate=30/1"));
+        assert!(description.contains("nvvidconv"));
+        assert!(description.contains("video/x-raw,format=UYVY,width=1280,height=720"));
+        assert!(description.contains("appsink name=framesink"));
+    }
 
     #[test]
     fn synthetic_device_uses_fixed_uyvy_format() {

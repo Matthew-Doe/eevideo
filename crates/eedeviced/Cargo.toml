@@ -13,6 +13,8 @@ clap.workspace = true
 ctrlc.workspace = true
 eevideo-device = { path = "../eevideo-device" }
 eevideo-proto = { path = "../eevideo-proto" }
+gstreamer.workspace = true
+gstreamer-app.workspace = true
 
 [dev-dependencies]
 eevideo-control = { path = "../eevideo-control" }
