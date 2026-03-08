@@ -21,5 +21,4 @@ export PKG_CONFIG_SYSROOT_DIR="$SYSROOT"
 export PKG_CONFIG_PATH="$SYSROOT/usr/lib/aarch64-linux-gnu/pkgconfig:$SYSROOT/usr/lib/pkgconfig:$SYSROOT/usr/share/pkgconfig"
 export RUSTFLAGS="--sysroot=$SYSROOT"
 
-cargo build --release --target "$TARGET" -p gst-plugin-eevideo
-
+cargo build --release --target "$TARGET" -p gst-plugin-eevideo -p eedeviced

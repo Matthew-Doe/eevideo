@@ -12,9 +12,10 @@ The workspace now also provides two host-side tools:
 - `eevid` for CoAP discovery, register access, and stream control
 - `eeview` for managed live viewing and optional recording with open codecs
 
-It also provides a fake device daemon:
+It also provides two device daemons:
 
 - `eefakedev` for a pure-Rust test-pattern EEVideo device you can run on a second machine
+- `eedeviced` for a single-stream EEVideo device daemon with synthetic and Jetson Argus inputs
 
 The current focus is a functional host-side MVP built around the existing
 public compatibility stream profile rather than a full native EEVideo transport
@@ -44,6 +45,7 @@ Implemented today:
 - `eevideosrc` and `eevideosink`
 - unit tests and feature-gated GStreamer integration tests
 - Windows and Jetson-oriented build scaffolding
+- a reusable device runtime plus a single-stream Jetson-oriented device daemon
 
 Explicitly out of scope for v1:
 
@@ -51,7 +53,7 @@ Explicitly out of scope for v1:
 - JPEG transport
 - resend, FEC, or security profiles
 - dynamic mid-stream caps renegotiation
-- production device firmware or hardware camera integration beyond the fake test daemon
+- multi-stream production device firmware and richer hardware control beyond the current single-stream daemon
 
 ## Workspace Layout
 
@@ -72,8 +74,14 @@ Explicitly out of scope for v1:
   - discovery, describe, register read/write, and stream control CLI
 - `crates/eeview`
   - managed live viewer and recorder CLI
+- `crates/eevideo-device`
+  - reusable EEVideo device runtime
+  - discovery/control handling for device daemons
 - `crates/eefakedev`
   - fake EEVideo device daemon with a pure-Rust test-pattern source
+- `crates/eedeviced`
+  - single-stream EEVideo device daemon
+  - synthetic and Jetson Argus-backed capture paths
 - `docs/`
   - implementation profile
   - interoperability smoke procedure
@@ -176,10 +184,10 @@ Run the workspace tests:
 cargo test --workspace
 ```
 
-Build the host-side CLIs and fake device:
+Build the host-side CLIs and device daemons:
 
 ```sh
-cargo build -p eevid -p eeview -p eefakedev
+cargo build -p eevid -p eeview -p eefakedev -p eedeviced
 ```
 
 `gst-plugin-eevideo` tests load GStreamer at runtime, so the GStreamer runtime
@@ -358,12 +366,32 @@ cargo run -p eeview -- --device-uri coap://192.168.1.50:5683 --bind-address 192.
 That flow uses the CoAP/register control path to configure `PC1` and then starts a unicast
 compatibility stream carrying the animated test pattern.
 
+## Jetson Orin Device Workflow
+
+For the real single-stream device daemon, use `eedeviced`.
+
+Synthetic mode is useful on any host:
+
+```sh
+cargo run -p eedeviced -- --bind 127.0.0.1:5683 --input synthetic
+```
+
+Jetson Argus mode is the intended CSI camera path:
+
+```sh
+./eedeviced --bind 0.0.0.0:5683 --advertise-address 192.168.1.50 --iface eth0 --input argus --sensor-id 0 --width 1280 --height 720 --fps 30 --mtu 1200
+```
+
+See [docs/jetson-orin-device-bringup.md](docs/jetson-orin-device-bringup.md) for the full
+deploy and verification workflow.
+
 ## Additional Documentation
 
 - [docs/developer-guide.md](docs/developer-guide.md)
 - [docs/compatibility-stream-profile.md](docs/compatibility-stream-profile.md)
 - [docs/implementation-profile.md](docs/implementation-profile.md)
 - [docs/interop-smoke.md](docs/interop-smoke.md)
+- [docs/jetson-orin-device-bringup.md](docs/jetson-orin-device-bringup.md)
 - [docs/spec-enhancement-proposal.md](docs/spec-enhancement-proposal.md)
 - [docs/async-metadata-layout-plan.md](docs/async-metadata-layout-plan.md)
 

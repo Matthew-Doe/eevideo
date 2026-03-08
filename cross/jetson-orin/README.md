@@ -1,7 +1,7 @@
 # Jetson Orin Cross Build
 
 This directory contains the JetPack 6.x cross-build path for the Rust
-`eevideo` plugin.
+`eevideo` plugin and the `eedeviced` device daemon.
 
 ## Assumptions
 
@@ -22,11 +22,16 @@ This directory contains the JetPack 6.x cross-build path for the Rust
 cross/jetson-orin/build.sh /absolute/path/to/jetson-sysroot
 ```
 
-The resulting plugin will be emitted under:
+The resulting artifacts will be emitted under:
 
 ```text
 target/aarch64-unknown-linux-gnu/release/
 ```
+
+Notable outputs:
+
+- `libgsteevideo.so`
+- `eedeviced`
 
 ## Optional Container Flow
 
@@ -45,4 +50,3 @@ docker run --rm \
   eevideo-jetson-build \
   /workspace/cross/jetson-orin/build.sh /opt/jetson-sysroot
 ```
-
