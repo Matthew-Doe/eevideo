@@ -2,6 +2,7 @@
 members = [
     "crates/eevideo-control",
     "crates/eevideo-proto",
+    "crates/eefakedev",
     "crates/gst-plugin-eevideo",
     "crates/eevid",
     "crates/eeview",

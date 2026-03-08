@@ -12,6 +12,10 @@ The workspace now also provides two host-side tools:
 - `eevid` for CoAP discovery, register access, and stream control
 - `eeview` for managed live viewing and optional recording with open codecs
 
+It also provides a fake device daemon:
+
+- `eefakedev` for a pure-Rust test-pattern EEVideo device you can run on a second machine
+
 The current focus is a functional host-side MVP built around the existing
 public compatibility stream profile rather than a full native EEVideo transport
 stack.
@@ -44,10 +48,10 @@ Implemented today:
 Explicitly out of scope for v1:
 
 - native EEVideo SoF/Data/EoF framing
-- public CoAP/register control integration
 - JPEG transport
 - resend, FEC, or security profiles
 - dynamic mid-stream caps renegotiation
+- production device firmware or hardware camera integration beyond the fake test daemon
 
 ## Workspace Layout
 
@@ -68,6 +72,8 @@ Explicitly out of scope for v1:
   - discovery, describe, register read/write, and stream control CLI
 - `crates/eeview`
   - managed live viewer and recorder CLI
+- `crates/eefakedev`
+  - fake EEVideo device daemon with a pure-Rust test-pattern source
 - `docs/`
   - implementation profile
   - interoperability smoke procedure
@@ -170,10 +176,10 @@ Run the workspace tests:
 cargo test --workspace
 ```
 
-Build the host-side CLIs:
+Build the host-side CLIs and fake device:
 
 ```sh
-cargo build -p eevid -p eeview
+cargo build -p eevid -p eeview -p eefakedev
 ```
 
 `gst-plugin-eevideo` tests load GStreamer at runtime, so the GStreamer runtime
@@ -322,6 +328,35 @@ Record with open codecs only:
 ```sh
 cargo run -p eeview -- --device-uri coap://192.168.1.50:5683 --bind-address 192.168.1.20 --record capture.mkv --encoder av1
 ```
+
+## Two-PC Fake Device Workflow
+
+Run `eefakedev` on `PC1` to emulate a single-stream EEVideo camera with a built-in test pattern:
+
+```sh
+cargo run -p eefakedev -- --advertise-address 192.168.1.50
+```
+
+On `PC2`, discover the fake device:
+
+```sh
+cargo run -p eevid -- discover
+```
+
+Describe it directly:
+
+```sh
+cargo run -p eevid -- --device-uri coap://192.168.1.50:5683 describe
+```
+
+Start managed viewing from `PC2` using its concrete receive address:
+
+```sh
+cargo run -p eeview -- --device-uri coap://192.168.1.50:5683 --bind-address 192.168.1.20 --port 5000
+```
+
+That flow uses the CoAP/register control path to configure `PC1` and then starts a unicast
+compatibility stream carrying the animated test pattern.
 
 ## Additional Documentation
 
