@@ -531,6 +531,7 @@ fn spawn_receiver_thread(
                         Ok(Some(FrameEvent::Complete(frame))) => {
                             if let Some(expected) = expected_format.as_ref() {
                                 if !frame_matches_expected_format(&frame, expected) {
+                                    stats.rollback_frame();
                                     stats.record_drop();
                                     stats.record_packet_anomaly();
                                     let _ = sender.try_send(ReceiverEvent::Error(
@@ -543,6 +544,7 @@ fn spawn_receiver_thread(
                             let format = FrameFormat::from_frame(&frame);
                             if let Some(existing) = current_format {
                                 if existing != format {
+                                    stats.rollback_frame();
                                     stats.record_drop();
                                     stats.record_packet_anomaly();
                                     let _ = sender.try_send(ReceiverEvent::Error(
@@ -555,6 +557,7 @@ fn spawn_receiver_thread(
                             }
 
                             if sender.try_send(ReceiverEvent::Frame(frame)).is_err() {
+                                stats.rollback_frame();
                                 stats.record_drop();
                             }
                         }

@@ -29,6 +29,14 @@ impl StreamStats {
         self.frames.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn rollback_frame(&self) {
+        let _ = self
+            .frames
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |frames| {
+                frames.checked_sub(1)
+            });
+    }
+
     pub fn record_drop(&self) {
         self.dropped_frames.fetch_add(1, Ordering::Relaxed);
     }
@@ -41,4 +49,3 @@ impl StreamStats {
         self.packet_anomalies.fetch_add(1, Ordering::Relaxed);
     }
 }
-
