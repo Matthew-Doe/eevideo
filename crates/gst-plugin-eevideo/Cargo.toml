@@ -23,3 +23,6 @@ gstreamer.workspace = true
 gstreamer-base.workspace = true
 once_cell.workspace = true
 socket2.workspace = true
+
+[dev-dependencies]
+eefakedev = { path = "../eefakedev" }

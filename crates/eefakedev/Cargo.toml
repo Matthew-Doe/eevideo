@@ -1,17 +1,16 @@
 [package]
-name = "eevid"
+name = "eefakedev"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true
-description = "EEVideo device discovery and register control CLI"
+description = "Fake EEVideo device daemon with a pure-Rust test-pattern source"
 
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
+ctrlc.workspace = true
 eevideo-control = { path = "../eevideo-control" }
 eevideo-proto = { path = "../eevideo-proto" }
-
-[dev-dependencies]
-eefakedev = { path = "../eefakedev" }
+if-addrs = "0.13"

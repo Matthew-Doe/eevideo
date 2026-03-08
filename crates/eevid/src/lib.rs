@@ -368,9 +368,11 @@ impl RegisterSelectorArgs {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+    use eefakedev::{FakeDeviceConfig, FakeDeviceServer};
     use eevideo_proto::PixelFormat;
 
-    use super::{parse_pixel_format_arg, parse_u32_arg};
+    use super::{parse_pixel_format_arg, parse_u32_arg, run, Cli};
 
     #[test]
     fn parses_decimal_and_hex_numbers() {
@@ -382,5 +384,57 @@ mod tests {
     fn parses_pixel_formats() {
         assert_eq!(parse_pixel_format_arg("gray8").unwrap(), PixelFormat::Mono8);
         assert_eq!(parse_pixel_format_arg("UYVY").unwrap(), PixelFormat::Uyvy);
+    }
+
+    #[test]
+    fn describe_command_works_against_fake_device() {
+        let device = FakeDeviceServer::spawn(FakeDeviceConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            width: 32,
+            height: 16,
+            pixel_format: PixelFormat::Mono8,
+            ..FakeDeviceConfig::default()
+        })
+        .unwrap();
+
+        let cli = Cli::parse_from(["eevid", "--device-uri", &device.uri(), "describe"]);
+        let output = run(cli).unwrap();
+
+        assert!(output.contains("device-uri:"));
+        assert!(output.contains("streams: stream0"));
+        assert!(output.contains("register stream0_MaxPacketSize"));
+    }
+
+    #[test]
+    fn stream_start_command_starts_fake_device() {
+        let device = FakeDeviceServer::spawn(FakeDeviceConfig {
+            bind: "127.0.0.1:0".parse().unwrap(),
+            width: 32,
+            height: 16,
+            pixel_format: PixelFormat::Mono8,
+            ..FakeDeviceConfig::default()
+        })
+        .unwrap();
+
+        let cli = Cli::parse_from([
+            "eevid",
+            "--device-uri",
+            &device.uri(),
+            "stream-start",
+            "--stream-name",
+            "stream0",
+            "--destination-host",
+            "127.0.0.1",
+            "--port",
+            "5000",
+            "--bind-address",
+            "127.0.0.1",
+            "--max-packet-size",
+            "1200",
+        ]);
+        let output = run(cli).unwrap();
+
+        assert!(output.contains("running stream-id="));
+        assert_eq!(device.start_count(), 1);
     }
 }
