@@ -3,8 +3,8 @@ param(
     [string[]]$Command
 )
 
-$gstBin = "C:\Program Files\gstreamer\1.0\msvc_x86_64\bin"
-if (Test-Path $gstBin) {
+$gstBin = $env:GSTREAMER_BIN_DIR
+if ($gstBin -and (Test-Path $gstBin)) {
     $env:Path = "$gstBin;$env:Path"
 }
 

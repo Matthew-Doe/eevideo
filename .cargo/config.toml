@@ -1,11 +1,9 @@
 [env]
-PKG_CONFIG = "C:/ProgramData/chocolatey/bin/pkg-config.exe"
-PKG_CONFIG_PATH = "C:/Program Files/gstreamer/1.0/msvc_x86_64/lib/pkgconfig"
+PKG_CONFIG = "pkg-config"
+PKG_CONFIG_PATH = "${env:GSTREAMER_PKG_CONFIG_PATH}"
 
 [target.x86_64-pc-windows-msvc]
-# pkg-config locates the GStreamer .pc files correctly on this machine, but the
-# emitted Windows libdir loses the drive prefix and breaks link.exe. Add the
-# import-library directory explicitly so linked builds do not depend on that
-# malformed /LIBPATH value.
-rustflags = ["-Lnative=C:/Program Files/gstreamer/1.0/msvc_x86_64/lib"]
-runner = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "C:/devel/eevideo/.cargo/windows-runner.ps1"]
+# Set GSTREAMER_LIB_DIR to the GStreamer import-library directory, for example:
+# C:/Program Files/gstreamer/1.0/msvc_x86_64/lib
+rustflags = ["-Lnative=${env:GSTREAMER_LIB_DIR}"]
+runner = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", ".cargo/windows-runner.ps1"]
