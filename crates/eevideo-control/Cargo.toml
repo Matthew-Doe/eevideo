@@ -15,4 +15,5 @@ serde_yaml = "0.9"
 socket2.workspace = true
 
 [dev-dependencies]
+eefakedev = { path = "../eefakedev" }
 tempfile = "3.23"

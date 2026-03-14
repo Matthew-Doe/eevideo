@@ -162,7 +162,19 @@ pub fn run(cli: Cli) -> Result<String> {
                 "interface-address: {}",
                 description.summary.interface_address
             )?;
-            writeln!(output, "streams: {}", description.streams.join(", "))?;
+            writeln!(
+                output,
+                "streams: {}",
+                description
+                    .streams
+                    .iter()
+                    .map(|stream| stream.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )?;
+            for stream in &description.streams {
+                writeln!(output, "{}", format_advertised_stream(stream))?;
+            }
             writeln!(
                 output,
                 "profiles: {}",
@@ -335,6 +347,20 @@ fn format_register_value(value: &RegisterValue) -> String {
     }
 }
 
+fn format_advertised_stream(stream: &eevideo_control::AdvertisedStream) -> String {
+    match &stream.mode {
+        Some(mode) => format!(
+            "stream {}: {} {}x{} @ {} fps",
+            stream.name,
+            pixel_format_name(&mode.pixel_format),
+            mode.width,
+            mode.height,
+            mode.fps
+        ),
+        None => format!("stream {}: mode unavailable", stream.name),
+    }
+}
+
 fn profile_name(profile: &StreamProfileId) -> &'static str {
     match profile {
         StreamProfileId::CompatibilityV1 => "compatibility-v1",
@@ -407,6 +433,7 @@ mod tests {
             width: 32,
             height: 16,
             pixel_format: PixelFormat::Mono8,
+            fps: 24,
             ..FakeDeviceConfig::default()
         })
         .unwrap();
@@ -416,6 +443,7 @@ mod tests {
 
         assert!(output.contains("device-uri:"));
         assert!(output.contains("streams: stream0"));
+        assert!(output.contains("stream stream0: GRAY8 32x16 @ 24 fps"));
         assert!(output.contains("register stream0_MaxPacketSize"));
     }
 

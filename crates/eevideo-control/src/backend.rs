@@ -779,6 +779,7 @@ mod tests {
     const STREAM_X_OFFSET_ADDR: u32 = 0x0004_002c;
     const STREAM_Y_OFFSET_ADDR: u32 = 0x0004_0030;
     const STREAM_TEST_PATTERN_ADDR: u32 = 0x0004_0034;
+    const STREAM_FPS_ADDR: u32 = 0x0004_0038;
 
     #[test]
     fn parses_device_uri_without_scheme() {
@@ -1065,7 +1066,7 @@ mod tests {
     fn build_registers() -> BTreeMap<u32, u32> {
         let mut registers = BTreeMap::new();
         registers.insert(CAPABILITIES_ADDR, 0xE71D_8FFF);
-        registers.insert(FEATURE_TABLE_ADDR, 0x1030_010E);
+        registers.insert(FEATURE_TABLE_ADDR, 0x1030_010F);
 
         let pointers = [
             STREAM_DESC_ADDR,
@@ -1082,6 +1083,7 @@ mod tests {
             STREAM_X_OFFSET_ADDR,
             STREAM_Y_OFFSET_ADDR,
             STREAM_TEST_PATTERN_ADDR,
+            STREAM_FPS_ADDR,
         ];
         for (index, pointer) in pointers.into_iter().enumerate() {
             registers.insert(FEATURE_TABLE_ADDR + 4 + (index as u32 * 4), pointer);
@@ -1105,6 +1107,7 @@ mod tests {
         registers.insert(STREAM_X_OFFSET_ADDR, 0);
         registers.insert(STREAM_Y_OFFSET_ADDR, 0);
         registers.insert(STREAM_TEST_PATTERN_ADDR, 0);
+        registers.insert(STREAM_FPS_ADDR, 30);
         registers
     }
 }

@@ -40,6 +40,20 @@ pub struct StreamFormatDescriptor {
     pub height: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdvertisedStreamMode {
+    pub pixel_format: PixelFormat,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdvertisedStream {
+    pub name: String,
+    pub mode: Option<AdvertisedStreamMode>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ControlTransportKind {
     Noop,

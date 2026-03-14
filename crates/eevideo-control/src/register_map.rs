@@ -12,6 +12,7 @@ const STREAM_REGISTER_NAMES: &[&str] = &[
     "PixelsPerLine",
     "LinesPerFrame",
     "PixelFormat",
+    "FramesPerSecond",
 ];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -279,7 +280,10 @@ pub fn field_mask(definition: &FeatureFieldDefinition) -> Result<(u32, u32), Con
 pub(crate) fn register_error(error: RegisterError) -> ControlError {
     match error {
         RegisterError::Io(err) => {
-            let kind = if err.kind() == std::io::ErrorKind::TimedOut {
+            let kind = if matches!(
+                err.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ) {
                 ControlErrorKind::Timeout
             } else {
                 ControlErrorKind::Connection

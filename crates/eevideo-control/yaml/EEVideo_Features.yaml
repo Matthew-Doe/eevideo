@@ -322,6 +322,16 @@
             tpMode:
               msb: 3
               len: 4
+    - index: 14
+      name: Frames Per Second
+      registers:
+        - offset: 0
+          name: FramesPerSecond
+          acc: ro
+          fields:
+            fps:
+              msb: 31
+              len: 32
 
 "0x301001":
   name: I2C Controller

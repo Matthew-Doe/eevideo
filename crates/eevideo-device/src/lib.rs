@@ -33,6 +33,7 @@ pub const STREAM_ACQ_ADDR: u32 = 0x0004_0028;
 pub const STREAM_X_OFFSET_ADDR: u32 = 0x0004_002c;
 pub const STREAM_Y_OFFSET_ADDR: u32 = 0x0004_0030;
 pub const STREAM_TEST_PATTERN_ADDR: u32 = 0x0004_0034;
+pub const STREAM_FPS_ADDR: u32 = 0x0004_0038;
 
 pub const MAX_PACKET_ENABLE_BIT: u32 = 1 << 16;
 const MAX_PACKET_MASK: u32 = 0xffff;
@@ -362,7 +363,7 @@ fn build_strings(config: &DeviceRuntimeConfig) -> BTreeMap<u32, Vec<u8>> {
 fn build_registers(config: &DeviceRuntimeConfig) -> BTreeMap<u32, u32> {
     let mut registers = BTreeMap::new();
     registers.insert(CAPABILITIES_ADDR, 0xE71D_8FFF);
-    registers.insert(FEATURE_TABLE_ADDR, 0x1030_010E);
+    registers.insert(FEATURE_TABLE_ADDR, 0x1030_010F);
 
     let pointers = [
         STREAM_DESC_ADDR,
@@ -379,6 +380,7 @@ fn build_registers(config: &DeviceRuntimeConfig) -> BTreeMap<u32, u32> {
         STREAM_X_OFFSET_ADDR,
         STREAM_Y_OFFSET_ADDR,
         STREAM_TEST_PATTERN_ADDR,
+        STREAM_FPS_ADDR,
     ];
     for (index, pointer) in pointers.into_iter().enumerate() {
         registers.insert(FEATURE_TABLE_ADDR + 4 + (index as u32 * 4), pointer);
@@ -405,6 +407,7 @@ fn build_registers(config: &DeviceRuntimeConfig) -> BTreeMap<u32, u32> {
     registers.insert(STREAM_X_OFFSET_ADDR, 0);
     registers.insert(STREAM_Y_OFFSET_ADDR, 0);
     registers.insert(STREAM_TEST_PATTERN_ADDR, 0);
+    registers.insert(STREAM_FPS_ADDR, config.fps);
     registers
 }
 
@@ -758,6 +761,10 @@ fn normalize_write_value(
     old_value: u32,
     requested_value: u32,
 ) -> u32 {
+    if address == STREAM_FPS_ADDR {
+        return old_value;
+    }
+
     if !config.enforce_fixed_format {
         return requested_value;
     }
@@ -768,6 +775,7 @@ fn normalize_write_value(
         STREAM_PIXEL_FORMAT_ADDR if requested_value != (config.pixel_format.pfnc() & 0xffff) => {
             old_value
         }
+        STREAM_FPS_ADDR => old_value,
         _ => requested_value,
     }
 }
@@ -938,7 +946,7 @@ mod tests {
     use super::{
         build_discovery_response, build_registers, CaptureBackend, CaptureConfiguration,
         DeviceRuntime, DeviceRuntimeConfig, SelectedInterface, SyntheticCaptureBackend,
-        SyntheticCaptureConfig, STREAM_HEIGHT_ADDR, STREAM_MAX_PACKET_ADDR,
+        SyntheticCaptureConfig, STREAM_FPS_ADDR, STREAM_HEIGHT_ADDR, STREAM_MAX_PACKET_ADDR,
         STREAM_PIXEL_FORMAT_ADDR, STREAM_WIDTH_ADDR,
     };
     use eevideo_control::discovery::parse_discovery_advertisement;
@@ -952,6 +960,7 @@ mod tests {
     fn register_map_uses_expected_defaults() {
         let registers = build_registers(&DeviceRuntimeConfig::default());
         assert_eq!(registers.get(&STREAM_MAX_PACKET_ADDR).copied(), Some(1200));
+        assert_eq!(registers.get(&STREAM_FPS_ADDR).copied(), Some(30));
     }
 
     #[test]
@@ -1031,5 +1040,25 @@ mod tests {
             registers.get(&STREAM_PIXEL_FORMAT_ADDR).copied(),
             Some(PixelFormat::Mono8.pfnc() & 0xffff)
         );
+    }
+
+    #[test]
+    fn fps_register_remains_device_owned() {
+        let device = DeviceRuntime::spawn(
+            DeviceRuntimeConfig {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                fps: 30,
+                ..DeviceRuntimeConfig::default()
+            },
+            SyntheticCaptureBackend::new(SyntheticCaptureConfig::default()),
+        )
+        .unwrap();
+        let client = RegisterClient::new("127.0.0.1:0".parse().unwrap(), device.local_addr())
+            .with_timeout(Duration::from_millis(250));
+
+        client.write_u32(STREAM_FPS_ADDR, 99).unwrap();
+
+        let registers = device.registers();
+        assert_eq!(registers.get(&STREAM_FPS_ADDR).copied(), Some(30));
     }
 }
