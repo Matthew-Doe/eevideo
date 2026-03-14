@@ -4,8 +4,10 @@ This guide is for the first time you turn a Jetson Nano running JetPack 4.x
 into an EEVideo device with `eedeviced`.
 
 Use it when the Nano OS is already installed and you want the first EEVideo
-bring-up on that device. This path uses `--input pipeline`, not the built-in
-`argus` provider. If you are bringing up Jetson Orin on JetPack 6.x, use
+bring-up on that device. For Jetson CSI cameras, this guide uses
+`--input pipeline`, not the built-in `argus` provider. If your Jetson camera or
+capture device is exposed as `/dev/videoX`, use the alternate `--input v4l2`
+path included below. If you are bringing up Jetson Orin on JetPack 6.x, use
 [jetson-orin-first-time-setup.md](jetson-orin-first-time-setup.md). If you need
 the provider matrix, use [eedeviced-provider-guide.md](eedeviced-provider-guide.md).
 
@@ -21,7 +23,8 @@ This guide assumes you already have:
 - JetPack 4.x / L4T 32.7.x installed on the Nano
 - shell access to the Nano
 - a working network connection
-- a CSI camera recognized by `nvarguscamerasrc`
+- either a CSI camera recognized by `nvarguscamerasrc` or a V4L2 device
+  exposed as `/dev/videoX`
 
 This guide does not cover:
 
@@ -33,7 +36,8 @@ This guide does not cover:
 ## What You Need
 
 - a Jetson Nano running JetPack 4.x / L4T 32.7.x
-- a CSI camera that works with `nvarguscamerasrc`
+- either a CSI camera that works with `nvarguscamerasrc` or a Jetson camera or
+  grabber that appears as `/dev/videoX`
 - a second machine that will run `eevid` and `eeview`
 - a network path between the Nano and the host
 - this repository checked out on the Nano
@@ -57,19 +61,21 @@ The Nano device path in this repo is:
 - CoAP/register discovery and control on port `5683`
 - one stream named `stream0`
 - `CompatibilityV1` transport
-- `UYVY` output
-- a user-owned GStreamer pipeline ending in `appsink name=framesink`
+- a fixed output mode such as `UYVY 1280x720@30`
+- either a user-owned GStreamer pipeline ending in `appsink name=framesink` or
+  a V4L2 capture node at `/dev/videoX`
 
 The host-side tools stay the same:
 
 - `eevid` for discovery and stream control
 - `eeview` for managed live viewing
 
-## Step 1: Confirm The Existing Nano Setup
+## Step 1: Confirm The Existing Nano Camera Path
 
-Confirm the board is on JetPack 4.x and that the camera stack is already alive.
+Confirm the board is on JetPack 4.x and that the camera path you plan to use is
+already alive.
 
-On the Nano:
+If you are using a CSI path through `nvarguscamerasrc`, test that first:
 
 ```sh
 gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! fakesink
@@ -78,6 +84,18 @@ gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! fakesink
 If that fails, stop here and fix the Nano camera setup first. The EEVideo
 pipeline depends on the same Argus camera service, and this guide assumes that
 part is already working.
+
+If your Jetson camera is exposed as `/dev/videoX` instead, identify the device
+and list the supported modes:
+
+```sh
+v4l2-ctl --list-devices
+v4l2-ctl -d /dev/video0 --list-formats-ext
+```
+
+If `v4l2-ctl` is missing, install `v4l-utils` first. Pick one concrete mode
+from `--list-formats-ext`, then keep `--pixel-format`, `--width`, `--height`,
+and `--fps` aligned with that exact mode through the rest of this guide.
 
 Decide these values before continuing:
 
@@ -131,10 +149,12 @@ sudo cp cross/jetson-orin/systemd/eedeviced.env.example /etc/eevideo/eedeviced.e
 sudo chmod +x /opt/eevideo/eedeviced-launch.sh
 ```
 
-## Step 4: Validate The CSI Pipeline Locally
+## Step 4: Validate The Camera Path Locally
 
 Before starting `eedeviced`, prove the Nano can negotiate the intended first
-mode:
+mode for the camera path you chose.
+
+If you are using a CSI path through `nvarguscamerasrc`:
 
 ```sh
 gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! \
@@ -144,7 +164,17 @@ gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! \
   fakesink
 ```
 
-If that fails, do not debug EEVideo yet. Fix the local GStreamer path first.
+If you are using a V4L2 device instead, validate one exact mode reported by
+`v4l2-ctl`. Example for `UYVY 1280x720@30`:
+
+```sh
+gst-launch-1.0 v4l2src device=/dev/video0 ! \
+  'video/x-raw,format=UYVY,width=1280,height=720,framerate=30/1' ! \
+  fakesink
+```
+
+If either local test fails, do not debug EEVideo yet. Fix the local camera path
+first.
 
 ## Step 5: Start The EEVideo Device Manually First
 
@@ -166,6 +196,23 @@ On the Nano:
   --pipeline "nvarguscamerasrc sensor-id=0 ! video/x-raw(memory:NVMM),format=NV12,width=1280,height=720,framerate=30/1 ! nvvidconv ! video/x-raw,format=UYVY,width=1280,height=720 ! appsink name=framesink sync=false max-buffers=1 drop=true"
 ```
 
+If your Jetson camera is exposed as `/dev/video0` instead, use this alternate
+command and adjust the mode to one reported by `v4l2-ctl`:
+
+```sh
+./target/release/eedeviced \
+  --bind 0.0.0.0:5683 \
+  --advertise-address 192.168.1.50 \
+  --iface eth0 \
+  --input v4l2 \
+  --device /dev/video0 \
+  --pixel-format uyvy \
+  --width 1280 \
+  --height 720 \
+  --fps 30 \
+  --mtu 1200
+```
+
 What each flag is doing:
 
 - `--bind`: listens for discovery and register control
@@ -176,6 +223,10 @@ What each flag is doing:
 - `--width`, `--height`, `--fps`: must match the final appsink caps
 - `--mtu`: UDP payload limit for the stream
 - `--pipeline`: owns the full CSI capture pipeline ending in `appsink name=framesink`
+
+If you use `v4l2` instead, replace `--input pipeline` and `--pipeline` with
+`--input v4l2 --device /dev/video0`, and keep the mode aligned with one entry
+from `v4l2-ctl --list-formats-ext`.
 
 Keep that process running while you validate from the host.
 
@@ -198,8 +249,8 @@ You should see:
 - one device
 - one stream named `stream0`
 - `compatibility-v1`
-- `UYVY 1280x720`
-- `stream stream0: UYVY 1280x720 @ 30 fps`
+- the configured width, height, pixel format, and fps
+- `stream stream0: ... @ ... fps`
 
 ## Step 7: Start A Control-Plane Smoke
 
@@ -208,6 +259,9 @@ Before using `eeview`, verify that the Nano accepts stream control:
 ```sh
 cargo run -p eevid -- --device-uri coap://192.168.1.50:5683 stream-start --stream-name stream0 --destination-host 192.168.1.20 --port 5000 --bind-address 192.168.1.20 --max-packet-size 1200 --width 1280 --height 720 --pixel-format uyvy
 ```
+
+If you are using the `v4l2` path with a different mode, substitute the width,
+height, and pixel format that match your `v4l2-ctl` output.
 
 Expected result:
 
@@ -243,6 +297,22 @@ EEVIDEO_HEIGHT=720
 EEVIDEO_FPS=30
 EEVIDEO_MTU=1200
 EEVIDEO_PIPELINE=nvarguscamerasrc sensor-id=0 ! video/x-raw(memory:NVMM),format=NV12,width=1280,height=720,framerate=30/1 ! nvvidconv ! video/x-raw,format=UYVY,width=1280,height=720 ! appsink name=framesink sync=false max-buffers=1 drop=true
+```
+
+If you are using a V4L2 camera instead, use this alternate service config and
+keep the mode aligned with `v4l2-ctl --list-formats-ext`:
+
+```sh
+EEVIDEO_BIND=0.0.0.0:5683
+EEVIDEO_ADVERTISE_ADDRESS=192.168.1.50
+EEVIDEO_IFACE=eth0
+EEVIDEO_INPUT=v4l2
+EEVIDEO_DEVICE=/dev/video0
+EEVIDEO_PIXEL_FORMAT=uyvy
+EEVIDEO_WIDTH=1280
+EEVIDEO_HEIGHT=720
+EEVIDEO_FPS=30
+EEVIDEO_MTU=1200
 ```
 
 Then enable the service:
@@ -282,6 +352,14 @@ If `nvvidconv` or the full local pipeline fails:
 - keep the final caps at `UYVY`
 - prove the same pipeline in plain `gst-launch-1.0` before retrying `eedeviced`
 
+If you are using a V4L2 camera and startup fails:
+
+- confirm the device path with `v4l2-ctl --list-devices`
+- compare pixel format, width, height, and fps with
+  `v4l2-ctl -d /dev/video0 --list-formats-ext`
+- prove the same mode in plain `gst-launch-1.0 v4l2src ... ! fakesink` before
+  retrying `eedeviced`
+
 If `eedeviced` exits on startup with a caps mismatch:
 
 - compare `--pixel-format`, `--width`, `--height`, and `--fps` with the final
@@ -301,7 +379,7 @@ If `eeview` starts but no frames arrive:
 - keep `mtu` at `1200`
 - use unicast first
 - confirm the host `--bind-address` is the host's real NIC address, not `0.0.0.0`
-- rerun the local Nano pipeline test before debugging the network path
+- rerun the local Nano camera-path test before debugging the network path
 
 ## After The First Successful EEVideo Stream
 

@@ -81,6 +81,9 @@ Notes:
 ### `v4l2`
 
 Use this on Linux for webcams, frame grabbers, and other `/dev/video*` devices.
+On Jetson, use this provider for cameras or grabbers that are exposed as
+`/dev/videoX`. For Jetson CSI paths you manage through `nvarguscamerasrc`, keep
+using `pipeline` instead.
 
 Example:
 
@@ -98,12 +101,31 @@ Example:
   --mtu 1200
 ```
 
+Example Jetson V4L2 path:
+
+```sh
+./eedeviced \
+  --bind 0.0.0.0:5683 \
+  --advertise-address 192.168.1.50 \
+  --iface eth0 \
+  --input v4l2 \
+  --device /dev/video0 \
+  --pixel-format uyvy \
+  --width 1280 \
+  --height 720 \
+  --fps 30 \
+  --mtu 1200
+```
+
 Notes:
 
 - this provider uses `v4l2src`
 - it requests the configured caps directly and fails startup if the device
   cannot negotiate them
 - Bayer formats use `video/x-bayer`; no color conversion is inserted
+- on Jetson, list devices and modes with `v4l2-ctl --list-devices` and
+  `v4l2-ctl -d /dev/video0 --list-formats-ext` before picking width, height,
+  fps, and pixel format
 
 ### `pipeline`
 
@@ -162,8 +184,10 @@ Notes:
 - the pipeline must expose `appsink name=framesink`
 - the negotiated appsink caps must match the configured width, height, and pixel
   format
-- this is the recommended Jetson provider, including `nvarguscamerasrc`-backed
-  CSI cameras
+- this is the recommended Jetson provider for `nvarguscamerasrc`-backed CSI
+  cameras
+- on Jetson, use `v4l2` instead when the camera or capture device appears as
+  `/dev/videoX`
 - Jetson Nano on JetPack 4.x should use this provider, not the built-in `argus`
   provider
 - for the Nano operator flow, use
