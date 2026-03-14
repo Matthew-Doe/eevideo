@@ -6,7 +6,8 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use eevideo_control::{
-    CoapRegisterBackendConfig, ControlTarget, ControlTransportKind, DeviceController,
+    AdvertisedStreamMode, CoapRegisterBackendConfig, ControlTarget, ControlTransportKind,
+    DeviceController, DeviceDescription,
 };
 use gst::prelude::*;
 use gstreamer as gst;
@@ -36,6 +37,8 @@ pub struct Cli {
     stream_name: String,
     #[arg(long, default_value = "autovideosink")]
     video_sink: String,
+    #[arg(long, default_value_t = false)]
+    no_overlay: bool,
     #[arg(long)]
     record: Option<PathBuf>,
     #[arg(long)]
@@ -99,13 +102,27 @@ pub fn run(cli: Cli) -> Result<()> {
         local_port: cli.local_port,
     });
     let target = resolve_target(&controller, cli.device_uri.as_deref())?;
+    let overlay_text = if cli.no_overlay {
+        None
+    } else {
+        controller
+            .describe(&target)
+            .ok()
+            .and_then(|description| advertised_stream_overlay_text(&description, &cli.stream_name))
+    };
     let recording_spec = if cli.record.is_some() {
         Some(select_encoder(cli.encoder)?)
     } else {
         None
     };
 
-    let pipeline = build_pipeline(&cli, controller.shared_backend(), target, recording_spec)?;
+    let pipeline = build_pipeline(
+        &cli,
+        controller.shared_backend(),
+        target,
+        recording_spec,
+        overlay_text.as_deref(),
+    )?;
     let bus = pipeline.bus().context("pipeline did not expose a bus")?;
     let (interrupt_tx, interrupt_rx) = mpsc::channel();
     ctrlc::set_handler(move || {
@@ -151,6 +168,7 @@ fn build_pipeline(
     backend: eevideo_control::SharedControlBackend,
     target: ControlTarget,
     recording_spec: Option<EncoderSpec>,
+    overlay_text: Option<&str>,
 ) -> Result<gst::Pipeline> {
     let pipeline = gst::Pipeline::default();
     let src = gst::ElementFactory::make("eevideosrc")
@@ -168,11 +186,6 @@ fn build_pipeline(
 
     if let Some(recording_spec) = recording_spec {
         let tee = make_element("tee", None)?;
-        let display_queue = make_element("queue", Some("display-queue"))?;
-        let display_convert = make_element("videoconvert", Some("display-convert"))?;
-        let display_sink = make_element(&cli.video_sink, Some("display-sink"))?;
-        display_sink.set_property("sync", false);
-
         let record_queue = make_element("queue", Some("record-queue"))?;
         let record_convert = make_element("videoconvert", Some("record-convert"))?;
         let encoder = make_element(recording_spec.encoder_factory, Some("record-encoder"))?;
@@ -188,9 +201,6 @@ fn build_pipeline(
 
         pipeline.add_many([
             &tee,
-            &display_queue,
-            &display_convert,
-            &display_sink,
             &record_queue,
             &record_convert,
             &encoder,
@@ -199,22 +209,58 @@ fn build_pipeline(
         ])?;
 
         src.link(&tee)?;
-        gst::Element::link_many([&display_queue, &display_convert, &display_sink])?;
+        let display_queue = add_display_branch(&pipeline, cli, overlay_text)?;
         gst::Element::link_many([&record_queue, &record_convert, &encoder])?;
         link_tee_branch(&tee, &display_queue)?;
         link_tee_branch(&tee, &record_queue)?;
         link_into_mux(&encoder, &mux, recording_spec.mux_pad_template)?;
         mux.link(&file_sink)?;
     } else {
-        let queue = make_element("queue", Some("display-queue"))?;
-        let convert = make_element("videoconvert", Some("display-convert"))?;
-        let sink = make_element(&cli.video_sink, Some("display-sink"))?;
-        sink.set_property("sync", false);
-        pipeline.add_many([&queue, &convert, &sink])?;
-        gst::Element::link_many([&src, &queue, &convert, &sink])?;
+        let queue = add_display_branch(&pipeline, cli, overlay_text)?;
+        gst::Element::link_many([&src, &queue])?;
     }
 
     Ok(pipeline)
+}
+
+fn add_display_branch(
+    pipeline: &gst::Pipeline,
+    cli: &Cli,
+    overlay_text: Option<&str>,
+) -> Result<gst::Element> {
+    let queue = make_element("queue", Some("display-queue"))?;
+    let convert = make_element("videoconvert", Some("display-convert"))?;
+    pipeline.add_many([&queue, &convert])?;
+
+    if cli.no_overlay {
+        let sink = make_element(&cli.video_sink, Some("display-sink"))?;
+        sink.set_property("sync", false);
+        pipeline.add(&sink)?;
+        gst::Element::link_many([&queue, &convert, &sink])?;
+        return Ok(queue);
+    }
+
+    let video_sink = make_element(&cli.video_sink, Some("display-video-sink"))?;
+    video_sink.set_property("sync", false);
+    let fps_sink = make_element("fpsdisplaysink", Some("display-sink"))?;
+    fps_sink.set_property("sync", false);
+    fps_sink.set_property("text-overlay", true);
+    fps_sink.set_property("video-sink", &video_sink);
+    pipeline.add(&fps_sink)?;
+
+    if let Some(overlay_text) = overlay_text {
+        let overlay = make_element("textoverlay", Some("display-mode-overlay"))?;
+        overlay.set_property("text", overlay_text);
+        overlay.set_property("shaded-background", true);
+        overlay.set_property_from_str("halignment", "left");
+        overlay.set_property_from_str("valignment", "top");
+        pipeline.add(&overlay)?;
+        gst::Element::link_many([&queue, &convert, &overlay, &fps_sink])?;
+    } else {
+        gst::Element::link_many([&queue, &convert, &fps_sink])?;
+    }
+
+    Ok(queue)
 }
 
 fn resolve_target(
@@ -276,6 +322,28 @@ fn ensure_elements_available(spec: EncoderSpec) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn advertised_stream_overlay_text(
+    description: &DeviceDescription,
+    stream_name: &str,
+) -> Option<String> {
+    description
+        .streams
+        .iter()
+        .find(|stream| stream.name == stream_name)
+        .and_then(|stream| stream.mode.as_ref())
+        .map(format_mode_overlay_text)
+}
+
+fn format_mode_overlay_text(mode: &AdvertisedStreamMode) -> String {
+    format!(
+        "Mode: {} {}x{} @ {} fps",
+        mode.pixel_format.gst_format(),
+        mode.width,
+        mode.height,
+        mode.fps
+    )
 }
 
 fn make_element(factory: &str, name: Option<&str>) -> Result<gst::Element> {
@@ -350,7 +418,26 @@ pub fn suggested_record_path(kind: EncoderKind, base: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{suggested_record_path, EncoderKind};
+    use clap::Parser;
+    use eevideo_control::{
+        default_control_backend, AdvertisedStream, AdvertisedStreamMode, ControlTarget,
+        ControlTransportKind, DeviceDescription, DeviceSummary,
+    };
+    use gst::prelude::*;
+    use gstreamer as gst;
+    use std::path::PathBuf;
+
+    use super::{
+        advertised_stream_overlay_text, build_pipeline, suggested_record_path, Cli, EncoderKind,
+    };
+
+    fn init_gst() {
+        static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        INIT.get_or_init(|| {
+            gst::init().unwrap();
+            gsteevideo::register_static().unwrap();
+        });
+    }
 
     #[test]
     fn suggested_record_extensions_match_encoder_kind() {
@@ -362,5 +449,207 @@ mod tests {
             suggested_record_path(EncoderKind::Vp9, std::path::Path::new("out")).extension(),
             Some(std::ffi::OsStr::new("webm"))
         );
+    }
+
+    #[test]
+    fn parses_no_overlay_flag() {
+        let cli = Cli::try_parse_from([
+            "eeview",
+            "--device-uri",
+            "coap://127.0.0.1:5683",
+            "--bind-address",
+            "127.0.0.1",
+            "--no-overlay",
+        ])
+        .unwrap();
+
+        assert!(cli.no_overlay);
+    }
+
+    #[test]
+    fn overlay_is_enabled_by_default() {
+        let cli = Cli::try_parse_from([
+            "eeview",
+            "--device-uri",
+            "coap://127.0.0.1:5683",
+            "--bind-address",
+            "127.0.0.1",
+        ])
+        .unwrap();
+
+        assert!(!cli.no_overlay);
+    }
+
+    #[test]
+    fn builds_overlay_text_from_advertised_stream_mode() {
+        let description = DeviceDescription {
+            summary: DeviceSummary {
+                target: ControlTarget {
+                    device_uri: "coap://127.0.0.1:5683".to_string(),
+                    transport_kind: ControlTransportKind::CoapRegister,
+                    auth_scope: None,
+                },
+                interface_name: "eth0".to_string(),
+                interface_address: "127.0.0.1".to_string(),
+                device_address: "127.0.0.1".to_string(),
+            },
+            capabilities: Default::default(),
+            device: eevideo_control::DeviceConfig::default(),
+            streams: vec![AdvertisedStream {
+                name: "stream0".to_string(),
+                mode: Some(AdvertisedStreamMode {
+                    pixel_format: eevideo_proto::PixelFormat::Uyvy,
+                    width: 1280,
+                    height: 720,
+                    fps: 30,
+                }),
+            }],
+        };
+
+        assert_eq!(
+            advertised_stream_overlay_text(&description, "stream0").as_deref(),
+            Some("Mode: UYVY 1280x720 @ 30 fps")
+        );
+    }
+
+    #[test]
+    fn build_pipeline_uses_overlay_elements_by_default() {
+        init_gst();
+        let cli = Cli::try_parse_from([
+            "eeview",
+            "--device-uri",
+            "coap://127.0.0.1:5683",
+            "--bind-address",
+            "127.0.0.1",
+            "--video-sink",
+            "fakesink",
+        ])
+        .unwrap();
+
+        let pipeline = build_pipeline(
+            &cli,
+            default_control_backend(),
+            ControlTarget {
+                device_uri: "coap://127.0.0.1:5683".to_string(),
+                transport_kind: ControlTransportKind::CoapRegister,
+                auth_scope: None,
+            },
+            None,
+            Some("Mode: UYVY 1280x720 @ 30 fps"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            pipeline.by_name("display-sink").unwrap().factory().unwrap().name(),
+            "fpsdisplaysink"
+        );
+        assert!(pipeline.by_name("display-mode-overlay").is_some());
+    }
+
+    #[test]
+    fn build_pipeline_omits_overlay_when_disabled() {
+        init_gst();
+        let cli = Cli::try_parse_from([
+            "eeview",
+            "--device-uri",
+            "coap://127.0.0.1:5683",
+            "--bind-address",
+            "127.0.0.1",
+            "--video-sink",
+            "fakesink",
+            "--no-overlay",
+        ])
+        .unwrap();
+
+        let pipeline = build_pipeline(
+            &cli,
+            default_control_backend(),
+            ControlTarget {
+                device_uri: "coap://127.0.0.1:5683".to_string(),
+                transport_kind: ControlTransportKind::CoapRegister,
+                auth_scope: None,
+            },
+            None,
+            Some("Mode: UYVY 1280x720 @ 30 fps"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            pipeline.by_name("display-sink").unwrap().factory().unwrap().name(),
+            "fakesink"
+        );
+        assert!(pipeline.by_name("display-mode-overlay").is_none());
+    }
+
+    #[test]
+    fn build_pipeline_keeps_fps_overlay_when_mode_text_is_unavailable() {
+        init_gst();
+        let cli = Cli::try_parse_from([
+            "eeview",
+            "--device-uri",
+            "coap://127.0.0.1:5683",
+            "--bind-address",
+            "127.0.0.1",
+            "--video-sink",
+            "fakesink",
+        ])
+        .unwrap();
+
+        let pipeline = build_pipeline(
+            &cli,
+            default_control_backend(),
+            ControlTarget {
+                device_uri: "coap://127.0.0.1:5683".to_string(),
+                transport_kind: ControlTransportKind::CoapRegister,
+                auth_scope: None,
+            },
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            pipeline.by_name("display-sink").unwrap().factory().unwrap().name(),
+            "fpsdisplaysink"
+        );
+        assert!(pipeline.by_name("display-mode-overlay").is_none());
+    }
+
+    #[test]
+    fn build_pipeline_keeps_record_branch_overlay_free() {
+        init_gst();
+        let cli = Cli {
+            device_uri: Some("coap://127.0.0.1:5683".to_string()),
+            iface: None,
+            timeout_ms: 1000,
+            local_port: 0,
+            yaml_root: None,
+            bind_address: "127.0.0.1".to_string(),
+            port: 5000,
+            source_timeout_ms: 2000,
+            latency_ms: 0,
+            stream_name: "stream0".to_string(),
+            video_sink: "fakesink".to_string(),
+            no_overlay: false,
+            record: Some(PathBuf::from("capture.mkv")),
+            encoder: None,
+        };
+
+        let pipeline = build_pipeline(
+            &cli,
+            default_control_backend(),
+            ControlTarget {
+                device_uri: "coap://127.0.0.1:5683".to_string(),
+                transport_kind: ControlTransportKind::CoapRegister,
+                auth_scope: None,
+            },
+            Some(super::select_encoder(None).unwrap()),
+            Some("Mode: UYVY 1280x720 @ 30 fps"),
+        )
+        .unwrap();
+
+        assert!(pipeline.by_name("record-queue").is_some());
+        assert!(pipeline.by_name("display-mode-overlay").is_some());
+        assert!(pipeline.by_name("record-convert").is_some());
     }
 }
