@@ -1,7 +1,7 @@
-# Non-Jetson First-Time EEVideo Device Setup
+# Linux Device First-Time EEVideo Setup
 
-This guide is for the first time you turn a non-Jetson machine into an EEVideo
-device with `eedeviced`.
+This guide is for the first time you turn a general Linux machine into an
+EEVideo device with `eedeviced`.
 
 Use it when you want a concrete bring-up path for:
 
@@ -37,7 +37,7 @@ Recommended first setup:
 
 ## What You Are Building
 
-The non-Jetson device path in this repo is:
+The general Linux device path in this repo is:
 
 - `eedeviced` on the source machine
 - CoAP/register discovery and control on port `5683`
@@ -266,7 +266,7 @@ If packets arrive but the receiver rejects frames:
 
 ## After The First Successful Stream
 
-Once the first non-Jetson setup works, the next things worth validating are:
+Once the first Linux device setup works, the next things worth validating are:
 
 - repeated start/stop cycles
 - another pixel format on the same source

@@ -5,10 +5,24 @@
 It exposes one `CompatibilityV1` stream over the existing CoAP/register control
 contract, but the frame source is now selected with `--input`.
 
-If you need a first-time bring-up path for non-Jetson devices, use
-[non-jetson-device-first-time-setup.md](non-jetson-device-first-time-setup.md).
+If you need a first-time bring-up path for general Linux devices, use
+[linux-device-first-time-setup.md](linux-device-first-time-setup.md).
 For Jetson Nano on JetPack 4.x, use
 [jetson-nano-jetpack4-first-time-setup.md](jetson-nano-jetpack4-first-time-setup.md).
+For Jetson Orin, use [jetson-orin-first-time-setup.md](jetson-orin-first-time-setup.md).
+
+For Jetson deployments in this repo, the recommended pattern is:
+
+- build `eedeviced` directly on the Jetson
+- use `--input pipeline` with an explicit `nvarguscamerasrc ... ! appsink` pipeline
+
+The built-in `argus` provider remains available in the CLI, but it is not
+currently a tested deployment path here. The cross-build helpers are kept as a
+fallback, not the recommended bring-up flow.
+
+Use this guide as a provider reference, not a full bring-up walkthrough. The
+setup guides above own the end-to-end build, install, verification, and service
+steps.
 
 ## Fixed-Mode Behavior
 
@@ -125,7 +139,7 @@ Example Bayer path:
   --pipeline "videotestsrc is-live=true ! video/x-bayer,format=bggr,width=1920,height=1080,framerate=30/1 ! appsink name=framesink sync=false max-buffers=1 drop=true"
 ```
 
-Example Jetson Nano JetPack 4.x CSI path:
+Example Jetson CSI path for the recommended provider:
 
 ```sh
 ./eedeviced \
@@ -148,6 +162,8 @@ Notes:
 - the pipeline must expose `appsink name=framesink`
 - the negotiated appsink caps must match the configured width, height, and pixel
   format
+- this is the recommended Jetson provider, including `nvarguscamerasrc`-backed
+  CSI cameras
 - Jetson Nano on JetPack 4.x should use this provider, not the built-in `argus`
   provider
 - for the Nano operator flow, use
@@ -155,8 +171,9 @@ Notes:
 
 ### `argus`
 
-Use this on Jetson Orin running JetPack 6.x for CSI capture through
-`nvarguscamerasrc`.
+This built-in convenience provider is available in the CLI, but it is not
+currently a tested deployment path in this repo. Prefer `pipeline` on Jetson,
+even when the camera source itself is `nvarguscamerasrc`.
 
 Example:
 
@@ -178,39 +195,23 @@ Notes:
 
 - this provider is `UYVY` only in the current implementation
 - it uses `nvarguscamerasrc ! nvvidconv ! appsink`
+- it is not currently a validated Jetson bring-up path in this repo
+- prefer `pipeline` so the full CSI path stays operator-owned
 - Jetson Nano on JetPack 4.x should use the `pipeline` provider so the full CSI
   pipeline stays operator-owned
 - for full Jetson setup, use [jetson-orin-first-time-setup.md](jetson-orin-first-time-setup.md)
 
-## First Verification
+## Verification Ownership
 
-Once the device is running, verify it from another machine:
+Use the setup guides for full end-to-end validation:
 
-```sh
-cargo run -p eevid -- discover
-```
+- [linux-device-first-time-setup.md](linux-device-first-time-setup.md)
+- [jetson-orin-first-time-setup.md](jetson-orin-first-time-setup.md)
+- [jetson-nano-jetpack4-first-time-setup.md](jetson-nano-jetpack4-first-time-setup.md)
 
-Then describe it directly:
+In general:
 
-```sh
-cargo run -p eevid -- --device-uri coap://192.168.1.50:5683 describe
-```
-
-The describe output now includes the advertised stream mode, for example:
-
-```text
-stream stream0: UYVY 1280x720 @ 30 fps
-```
-
-For a `UYVY` path, start managed viewing:
-
-```sh
-cargo run -p eeview -- --device-uri coap://192.168.1.50:5683 --bind-address 192.168.1.20 --port 5000
-```
-
-`eeview` shows a live FPS + mode HUD by default. Pass `--no-overlay` to turn
-that overlay off.
-
-For non-display-oriented formats like `Mono16` or Bayer, start with `eevid`
-control-plane verification first, then validate the stream with a receiver that
-understands the configured format.
+- verify discovery and describe with `eevid`
+- use `eeview` for `UYVY` or other directly viewable paths
+- for Bayer or `Mono16` paths, validate the control plane first and then use a
+  receiver that understands the configured format

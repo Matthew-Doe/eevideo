@@ -1,44 +1,25 @@
 # Developer Guide
 
-This document is for engineers who are new to the `eevideo` repository and need
-to build, test, run, and modify the current project without guessing how the
-pieces fit together.
+This document is for engineers who are changing the `eevideo` repository itself.
+It focuses on contributor workflow, code ownership hints, and the minimum docs
+you should read before changing behavior.
 
-## What This Repository Is
-
-This repository contains a Rust GStreamer plugin workspace with two crates:
-
-- `eevideo-proto`
-  - protocol parsing and serialization
-  - pixel-format mapping
-  - frame assembly
-  - stream statistics
-- `gst-plugin-eevideo`
-  - the GStreamer elements
-  - network receive/transmit behavior
-  - caps negotiation
-  - source and sink integration tests
-
-The project currently targets the existing public EEVideo compatibility stream
-profile, not a fully native EEVideo transport specification.
-
-Original upstream source code and related EEVideo projects are published at:
-
-- https://gitlab.com/eevideo
+If you are trying to bring up a device rather than modify the repo, start with
+[../README.md](../README.md) and [README.md](README.md).
 
 ## First-Day Checklist
 
 Use this order:
 
-1. Read [README.md](c:/devel/eevideo/README.md).
-2. Read [compatibility-stream-profile.md](c:/devel/eevideo/docs/compatibility-stream-profile.md).
-3. Read [implementation-profile.md](c:/devel/eevideo/docs/implementation-profile.md).
-4. Build and run `cargo test --workspace`.
-5. Run the local sender/receiver smoke test from the README.
-6. Only after that, start changing code.
+1. Read [../README.md](../README.md).
+2. Read [README.md](README.md) in this directory for the docs map.
+3. Read [compatibility-stream-profile.md](compatibility-stream-profile.md).
+4. Read [implementation-profile.md](implementation-profile.md).
+5. Run `cargo test --workspace`.
+6. Run a local sender/receiver smoke test from the repo README.
 
-If you skip step 2, you can easily implement behavior that looks reasonable but
-is outside the current project scope.
+If you skip the profile docs, it is easy to implement behavior that sounds
+reasonable but is outside the current repository scope.
 
 ## Toolchain Requirements
 
@@ -53,11 +34,10 @@ Required:
 
 Practical note:
 
-- The Chocolatey `pkg-config` binary works with the standard `Program Files`
-  GStreamer install path.
-- Some MSYS2 `pkg-config` builds handle `Program Files` poorly. If you are
-  stuck with one of those builds, use a no-space mirror or junction only as a
-  fallback and point `PKG_CONFIG_PATH` there.
+- the Chocolatey `pkg-config` binary works with the standard `Program Files`
+  GStreamer install path
+- some MSYS2 `pkg-config` builds handle `Program Files` poorly; use a no-space
+  mirror or junction only as a fallback
 
 ### Linux
 
@@ -93,30 +73,26 @@ set PATH=%GSTREAMER_BIN_DIR%;%PATH%
 
 ## Build And Test Workflow
 
-### Fast sanity check
+Fast sanity check:
 
 ```sh
 cargo test --workspace
 ```
 
-`gst-plugin-eevideo` tests load GStreamer at runtime, so the GStreamer runtime
-DLL directory must already be on `PATH` before you run them.
-
-The checked-in Windows runner is launched from `.cargo/config.toml` and will
-also derive the GStreamer `bin` directory from `GSTREAMER_BIN_DIR`,
-`GSTREAMER_LIB_DIR`, or `PKG_CONFIG_PATH` when possible.
-
-### Release build
+Release build:
 
 ```sh
 cargo build --release --workspace
 ```
 
-### GStreamer integration tests
+GStreamer integration tests:
 
 ```sh
 cargo test -p gst-plugin-eevideo --features gst-tests
 ```
+
+`gst-plugin-eevideo` tests load GStreamer at runtime, so the GStreamer runtime
+directory must already be on `PATH` before you run them.
 
 ## Running The Plugin Locally
 
@@ -126,30 +102,20 @@ Build the release plugin:
 cargo build --release --workspace
 ```
 
-Set:
-
-```cmd
-set GST_PLUGIN_PATH=C:\devel\eevideo\target\release
-```
-
-Receiver:
+Set `GST_PLUGIN_PATH` to the release directory, then run a simple receiver and
+sender pair:
 
 ```sh
 gst-launch-1.0 eevideosrc address=127.0.0.1 port=5000 timeout-ms=2000 ! videoconvert ! autovideosink
 ```
 
-Sender:
-
 ```sh
 gst-launch-1.0 videotestsrc ! video/x-raw,format=RGB,width=640,height=480,framerate=30/1 ! eevideosink host=127.0.0.1 port=5000 mtu=4000
 ```
 
-For high-throughput LAN tests, prefer `UYVY` rather than `RGB`. On a direct
-Windows-to-Windows Ethernet link with jumbo frames working end to end, the
-current implementation sustained roughly `44` to `54` fps at
-`1280x720@60 UYVY` with `mtu=8900`. Standard-MTU settings such as `mtu=1400`
-are still useful for compatibility testing, but they are packet-rate limited
-for this workload.
+For throughput-oriented LAN tests, prefer `UYVY` over `RGB`. Standard-MTU
+settings like `mtu=1400` are useful for compatibility testing, but they are
+packet-rate limited for high-bandwidth workloads.
 
 ### Multiple receivers on one port
 
@@ -168,12 +134,8 @@ The sender must transmit to that multicast destination:
 gst-launch-1.0 videotestsrc ! video/x-raw,format=UYVY,width=640,height=480,framerate=30/1 ! eevideosink host=239.255.10.11 port=5000 multicast-loop=true mtu=4000
 ```
 
-Two unicast listeners cannot both bind `127.0.0.1:5000`. Same-port fanout in
-this plugin is multicast-based rather than unicast socket sharing.
-
-If the host has multiple network interfaces and the default route is not the one
-you want, set `multicast-iface` on `eevideosrc` and `eevideosink` to a local
-IPv4 interface address.
+Two unicast listeners cannot both bind the same local UDP socket. Same-port
+fanout in this plugin is multicast-based rather than unicast socket sharing.
 
 ## Where To Make Changes
 
@@ -181,14 +143,12 @@ IPv4 interface address.
 
 Start in:
 
-- `docs/compatibility-stream-profile.md`
+- [compatibility-stream-profile.md](compatibility-stream-profile.md)
+- [implementation-profile.md](implementation-profile.md)
 - `crates/eevideo-proto/src/compat_stream.rs`
 - `crates/eevideo-proto/src/assembler.rs`
-- `docs/implementation-profile.md`
 
-You will usually also need to touch:
-
-- tests under `crates/gst-plugin-eevideo/tests/`
+You will usually also need tests under `crates/gst-plugin-eevideo/tests/`.
 
 ### If you are changing supported pixel formats
 
@@ -197,17 +157,12 @@ Start in:
 - `crates/eevideo-proto/src/pixel_format.rs`
 - `crates/gst-plugin-eevideo/src/common.rs`
 
-Then re-run:
-
-- protocol tests
-- plugin tests
-- a manual `gst-launch-1.0` smoke run
+Then rerun protocol tests, plugin tests, and a manual `gst-launch-1.0` smoke
+run.
 
 ### If you are changing source behavior
 
-Start in:
-
-- `crates/gst-plugin-eevideo/src/eevideosrc/imp.rs`
+Start in `crates/gst-plugin-eevideo/src/eevideosrc/imp.rs`.
 
 Typical areas:
 
@@ -218,9 +173,7 @@ Typical areas:
 
 ### If you are changing sink behavior
 
-Start in:
-
-- `crates/gst-plugin-eevideo/src/eevideosink/imp.rs`
+Start in `crates/gst-plugin-eevideo/src/eevideosink/imp.rs`.
 
 Typical areas:
 
@@ -229,36 +182,35 @@ Typical areas:
 - frame validation
 - transport configuration
 
-## Files New Developers Should Understand Early
+## Files New Contributors Should Understand Early
 
-- [Cargo.toml](c:/devel/eevideo/Cargo.toml)
-- [README.md](c:/devel/eevideo/README.md)
-- [implementation-profile.md](c:/devel/eevideo/docs/implementation-profile.md)
-- [compatibility-stream-profile.md](c:/devel/eevideo/docs/compatibility-stream-profile.md)
-- [compat_stream.rs](c:/devel/eevideo/crates/eevideo-proto/src/compat_stream.rs)
-- [assembler.rs](c:/devel/eevideo/crates/eevideo-proto/src/assembler.rs)
-- [imp.rs](c:/devel/eevideo/crates/gst-plugin-eevideo/src/eevideosrc/imp.rs)
-- [imp.rs](c:/devel/eevideo/crates/gst-plugin-eevideo/src/eevideosink/imp.rs)
+- [../Cargo.toml](../Cargo.toml)
+- [../README.md](../README.md)
+- [compatibility-stream-profile.md](compatibility-stream-profile.md)
+- [implementation-profile.md](implementation-profile.md)
+- `crates/eevideo-proto/src/compat_stream.rs`
+- `crates/eevideo-proto/src/assembler.rs`
+- `crates/gst-plugin-eevideo/src/eevideosrc/imp.rs`
+- `crates/gst-plugin-eevideo/src/eevideosink/imp.rs`
 
 ## Project Rules That Matter
 
-- The current stream profile is intentionally conservative.
-- Mid-stream format changes are rejected.
-- The first release is transport-focused, not control-plane complete.
-- New behavior should be backed by tests before it is treated as stable.
-- If a change alters wire behavior, the docs need to change with the code.
+- the current stream profile is intentionally conservative
+- mid-stream format changes are rejected
+- the first release is transport-focused, not control-plane complete
+- new behavior should be backed by tests before it is treated as stable
+- if a change alters wire behavior, the docs need to change with the code
 
 ## Common Mistakes
 
-- Treating the project as if it already implements the future native EEVideo stream format
-- Expanding pixel-format support without updating caps mapping and tests
-- Adding metadata or control behavior without defining wire semantics first
-- Assuming Windows shell commands and PowerShell syntax are interchangeable
-- Testing only with `videotestsrc` and not with a real camera or real receiver timing
+- treating the project as if it already implements the future native EEVideo
+  stream format
+- expanding pixel-format support without updating caps mapping and tests
+- adding metadata or control behavior without defining wire semantics first
+- assuming Windows shell commands and PowerShell syntax are interchangeable
+- testing only with `videotestsrc` and not with a real camera or receiver timing
 
 ## Suggested Development Loop
-
-Use this order for most changes:
 
 1. Update or add tests.
 2. Change the protocol or plugin code.
@@ -276,7 +228,6 @@ Check:
 - `PKG_CONFIG_PATH`
 - whether GStreamer dev packages are installed
 - whether the GStreamer runtime `bin` directory is on `PATH`
-- whether your Windows `pkg-config` build mishandles `Program Files`
 
 ### `cl.exe` is missing on Windows
 
@@ -288,7 +239,7 @@ Check:
 
 - `GST_PLUGIN_PATH`
 - whether you built `target/debug` or `target/release`
-- whether the plugin DLL/SO is under the path you exported
+- whether the plugin DLL or SO is under the path you exported
 
 ### The stream is very slow
 
@@ -299,9 +250,11 @@ Check:
 - whether the display sink is syncing to timestamps
 - whether the configured MTU is too small
 
-## When To Read The Other Docs
+## Related Docs
 
-- Read [interop-smoke.md](c:/devel/eevideo/docs/interop-smoke.md) if you want to test against upstream Go tools.
-- Read [spec-enhancement-proposal.md](c:/devel/eevideo/docs/spec-enhancement-proposal.md) if you need the rationale behind current protocol constraints.
-- Read [async-metadata-layout-plan.md](c:/devel/eevideo/docs/async-metadata-layout-plan.md) if you are exploring future metadata-aware transport designs.
-- Use https://gitlab.com/eevideo to find the original upstream source repositories referenced by the docs.
+- [interop-smoke.md](interop-smoke.md) for testing against upstream Go tools
+- [spec-enhancement-proposal.md](spec-enhancement-proposal.md) for protocol
+  rationale and future spec direction
+- [async-metadata-layout-plan.md](async-metadata-layout-plan.md) for future
+  metadata transport design exploration
+- https://gitlab.com/eevideo for original upstream source repositories

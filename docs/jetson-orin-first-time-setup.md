@@ -4,12 +4,19 @@ This guide is for the first time you turn a Jetson Orin into an EEVideo device
 with `eedeviced`.
 
 Use it when you want the full setup path from a fresh board to a working first
-stream. If you already have binaries on the Jetson and only need the shorter
-operator flow, use [jetson-orin-device-bringup.md](jetson-orin-device-bringup.md).
-If you need the provider matrix for non-Jetson sources, use
+stream. If you already have binaries on the Jetson, you can skip directly to
+Step 3 for install and startup, or Step 5 for host verification. If you need
+the provider matrix and CLI reference, use
 [eedeviced-provider-guide.md](eedeviced-provider-guide.md).
 If you are bringing up Jetson Nano on JetPack 4.x, use
 [jetson-nano-jetpack4-first-time-setup.md](jetson-nano-jetpack4-first-time-setup.md).
+
+For Jetson bring-up in this repo, the recommended path is building directly on
+the Jetson and running `--input pipeline` with an explicit
+`nvarguscamerasrc ... ! appsink` pipeline. The built-in `argus` provider
+remains available in the CLI, but it is not currently a tested deployment path
+here. The cross-build helpers are kept as a fallback, not the recommended
+workflow.
 
 ## What You Need
 
@@ -17,7 +24,9 @@ If you are bringing up Jetson Nano on JetPack 4.x, use
 - a CSI camera that works with `nvarguscamerasrc`
 - a second machine that will run `eevid` and `eeview`
 - a network path between the Jetson and the host
-- this repository checked out on the build machine
+- this repository checked out on the Jetson
+- this repository checked out on the host, or prebuilt `eevid` and `eeview`
+  binaries there
 
 Recommended first setup:
 
@@ -54,7 +63,7 @@ gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! fakesink
 ```
 
 If that fails, stop here and fix the Jetson camera setup first. `eedeviced`
-depends on the same Argus path.
+depends on the same camera stack through the explicit pipeline used below.
 
 Decide these values before continuing:
 
@@ -62,38 +71,42 @@ Decide these values before continuing:
 - network interface name on the Jetson, for example `eth0`
 - camera sensor id, usually `0` for the first sensor
 
-## Step 2: Build The Artifacts
+## Step 2: Build The Artifacts On The Jetson
 
-On the build machine, use the Jetson cross-build path:
+Build directly on the Jetson for the recommended path. Cross-building with
+`cross/jetson-orin/build.sh` exists in the repo, but it is not the recommended
+Jetson bring-up flow.
+
+On the Jetson, from a checkout of this repository:
 
 ```sh
-cross/jetson-orin/build.sh /absolute/path/to/jetson-sysroot
+cargo build --release -p eedeviced
 ```
 
-The outputs land under:
+The output lands under:
 
 ```text
-target/aarch64-unknown-linux-gnu/release/
+target/release/
 ```
 
-For first setup, copy these to the Jetson:
+For first setup, use these local files on the Jetson:
 
-- `eedeviced`
-- optionally `libgsteevideo.so` if you also want the plugin on the Jetson
+- `target/release/eedeviced`
+- `cross/jetson-orin/systemd/eedeviced.service`
+- `cross/jetson-orin/systemd/eedeviced-launch.sh`
+- `cross/jetson-orin/systemd/eedeviced.env.example`
 
-## Step 3: Copy Files To The Jetson
+## Step 3: Install Files On The Jetson
 
 Example:
 
 ```sh
-scp target/aarch64-unknown-linux-gnu/release/eedeviced nvidia@192.168.1.50:/home/nvidia/
-```
-
-For a cleaner permanent layout:
-
-```sh
-ssh nvidia@192.168.1.50 "sudo mkdir -p /opt/eevideo && sudo chown \$USER /opt/eevideo"
-scp target/aarch64-unknown-linux-gnu/release/eedeviced nvidia@192.168.1.50:/opt/eevideo/
+sudo mkdir -p /opt/eevideo /etc/eevideo
+sudo cp target/release/eedeviced /opt/eevideo/
+sudo cp cross/jetson-orin/systemd/eedeviced.service /etc/systemd/system/
+sudo cp cross/jetson-orin/systemd/eedeviced-launch.sh /opt/eevideo/
+sudo cp cross/jetson-orin/systemd/eedeviced.env.example /etc/eevideo/eedeviced.env
+sudo chmod +x /opt/eevideo/eedeviced-launch.sh
 ```
 
 ## Step 4: Start The Device Manually First
@@ -103,17 +116,29 @@ Do not start with `systemd`. Run it manually once so failures are obvious.
 On the Jetson:
 
 ```sh
-./eedeviced \
+gst-launch-1.0 nvarguscamerasrc sensor-id=0 ! \
+  'video/x-raw(memory:NVMM),format=NV12,width=1280,height=720,framerate=30/1' ! \
+  nvvidconv ! \
+  'video/x-raw,format=UYVY,width=1280,height=720' ! \
+  fakesink
+```
+
+If that fails, fix the local GStreamer path before debugging EEVideo control.
+
+Then start `eedeviced`:
+
+```sh
+./target/release/eedeviced \
   --bind 0.0.0.0:5683 \
   --advertise-address 192.168.1.50 \
   --iface eth0 \
-  --input argus \
-  --sensor-id 0 \
+  --input pipeline \
   --pixel-format uyvy \
   --width 1280 \
   --height 720 \
   --fps 30 \
-  --mtu 1200
+  --mtu 1200 \
+  --pipeline "nvarguscamerasrc sensor-id=0 ! video/x-raw(memory:NVMM),format=NV12,width=1280,height=720,framerate=30/1 ! nvvidconv ! video/x-raw,format=UYVY,width=1280,height=720 ! appsink name=framesink sync=false max-buffers=1 drop=true"
 ```
 
 What each flag is doing:
@@ -121,11 +146,11 @@ What each flag is doing:
 - `--bind`: listens for discovery and register control
 - `--advertise-address`: the IP address the host should connect to
 - `--iface`: the Jetson NIC used for device discovery context
-- `--input argus`: uses CSI capture through `nvarguscamerasrc`
-- `--sensor-id`: selects the camera
-- `--pixel-format uyvy`: the current `argus` provider only supports `UYVY`
+- `--input pipeline`: uses the operator-owned GStreamer path
+- `--pixel-format uyvy`: must match the final appsink caps
 - `--width`, `--height`, `--fps`: fixed first stream mode
 - `--mtu`: UDP payload limit for the stream
+- `--pipeline`: owns the full CSI capture pipeline ending in `appsink name=framesink`
 
 Keep that process running while you validate from the host.
 
@@ -180,24 +205,29 @@ Once manual startup is stable, use the packaged service files:
 - `cross/jetson-orin/systemd/eedeviced-launch.sh`
 - `cross/jetson-orin/systemd/eedeviced.env.example`
 
-Install them on the Jetson:
+Edit `/etc/eevideo/eedeviced.env`, then enable the service:
 
 ```sh
-sudo mkdir -p /etc/eevideo
-sudo cp cross/jetson-orin/systemd/eedeviced.service /etc/systemd/system/
-sudo cp cross/jetson-orin/systemd/eedeviced-launch.sh /opt/eevideo/
-sudo cp cross/jetson-orin/systemd/eedeviced.env.example /etc/eevideo/eedeviced.env
-sudo chmod +x /opt/eevideo/eedeviced-launch.sh
+EEVIDEO_BIND=0.0.0.0:5683
+EEVIDEO_ADVERTISE_ADDRESS=192.168.1.50
+EEVIDEO_IFACE=eth0
+EEVIDEO_INPUT=pipeline
+EEVIDEO_PIXEL_FORMAT=uyvy
+EEVIDEO_WIDTH=1280
+EEVIDEO_HEIGHT=720
+EEVIDEO_FPS=30
+EEVIDEO_MTU=1200
+EEVIDEO_PIPELINE=nvarguscamerasrc sensor-id=0 ! video/x-raw(memory:NVMM),format=NV12,width=1280,height=720,framerate=30/1 ! nvvidconv ! video/x-raw,format=UYVY,width=1280,height=720 ! appsink name=framesink sync=false max-buffers=1 drop=true
 ```
 
-Edit `/etc/eevideo/eedeviced.env`, then enable the service:
+Then enable the service:
 
 ```sh
 sudo systemctl daemon-reload
 sudo systemctl enable --now eedeviced
 ```
 
-Keep `EEVIDEO_PIXEL_FORMAT=uyvy` for the current Argus path. The packaged
+Keep `EEVIDEO_PIXEL_FORMAT=uyvy` for the current Jetson CSI path. The packaged
 service now passes pixel format explicitly instead of relying on CLI defaults.
 
 Check status:
@@ -221,7 +251,7 @@ If `eeview` starts but no frames arrive:
 - keep `mtu` at `1200`
 - use unicast first
 - confirm the host `--bind-address` is the host’s real NIC address, not `0.0.0.0`
-- verify the Jetson camera works with `gst-launch-1.0 nvarguscamerasrc ...`
+- verify the full Jetson pipeline works with `gst-launch-1.0 ... ! nvvidconv ! ... ! fakesink`
 
 If the device rejects stream settings:
 
@@ -236,4 +266,7 @@ Once the first setup works, the next things worth validating are:
 - repeated start/stop cycles
 - boot-time startup through `systemd`
 - a higher `mtu` on a known-good LAN
-- the full operator flow in [jetson-orin-device-bringup.md](jetson-orin-device-bringup.md)
+
+If you choose to experiment with the built-in `argus` provider later, treat it
+as an unvalidated path and keep the explicit `pipeline` provider as the default
+for production or troubleshooting.

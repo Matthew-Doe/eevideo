@@ -31,7 +31,7 @@ the EEVideo GitLab group:
 
 If you are new to this repository, start here:
 
-1. Read [docs/developer-guide.md](docs/developer-guide.md).
+1. Read [docs/README.md](docs/README.md).
 2. Install the toolchain and GStreamer dependencies for your platform.
 3. Run `cargo test --workspace`.
 4. Run the localhost smoke test from this README.
@@ -82,13 +82,14 @@ Explicitly out of scope for v1:
   - fake EEVideo device daemon with a pure-Rust test-pattern source
 - `crates/eedeviced`
   - single-stream EEVideo device daemon
-  - synthetic, Argus, and pipeline-backed capture paths
+  - synthetic, V4L2, and pipeline-backed capture paths
+  - built-in Argus convenience path available but not currently validated
 - `docs/`
   - implementation profile
   - interoperability smoke procedure
   - spec enhancement proposal
 - `cross/jetson-orin`
-  - Jetson cross-build notes, systemd assets, and container helpers
+  - experimental Jetson cross-build notes, systemd assets, and container helpers
 
 ## Supported Formats
 
@@ -402,7 +403,17 @@ The current providers are:
 - `synthetic` for local testing and protocol validation
 - `v4l2` for Linux webcams and capture devices
 - `pipeline` for arbitrary GStreamer pipelines that expose `appsink name=framesink`
-- `argus` for the turnkey Jetson Orin CSI path through `nvarguscamerasrc`
+- `argus` for a built-in Jetson CSI convenience path that is not currently validated
+
+For Jetson targets, the recommended path in this repo is:
+
+- build `eedeviced` directly on the device
+- use `--input pipeline` with an explicit `nvarguscamerasrc ... ! appsink` pipeline
+
+The built-in `argus` provider remains available in the CLI, but it is not
+currently a tested deployment path in this repo. The `cross/jetson-orin`
+helpers are kept as an experimental fallback rather than the recommended
+bring-up flow.
 
 The device stays fixed to one configured width, height, and pixel format per
 process start. Unsupported host-side width, height, and pixel-format writes are
@@ -436,34 +447,39 @@ CSI pipeline:
 That pipeline must negotiate the same `UYVY 1280x720@30` mode that
 `eedeviced` is configured with. If the appsink caps drift, startup fails early.
 
-Jetson Orin on JetPack 6.x keeps the built-in Argus convenience path:
+The same operator-owned `pipeline` approach is the recommended Jetson path on
+Jetson Orin as well.
+
+If you want to experiment with the built-in `argus` provider on Jetson Orin,
+the CLI path is:
 
 ```sh
 ./eedeviced --bind 0.0.0.0:5683 --advertise-address 192.168.1.50 --iface eth0 --input argus --sensor-id 0 --pixel-format uyvy --width 1280 --height 720 --fps 30 --mtu 1200
 ```
 
+Treat that `argus` path as experimental for now and prefer the explicit
+`pipeline` provider in production or first-time bring-up docs.
+
 See [docs/eedeviced-provider-guide.md](docs/eedeviced-provider-guide.md) for the
-provider matrix and example commands.
-For a first-time non-Jetson bring-up flow, use
-[docs/non-jetson-device-first-time-setup.md](docs/non-jetson-device-first-time-setup.md).
-For Jetson Nano on JetPack 4.x, use
-[docs/jetson-nano-jetpack4-first-time-setup.md](docs/jetson-nano-jetpack4-first-time-setup.md).
-See [docs/jetson-orin-device-bringup.md](docs/jetson-orin-device-bringup.md) for the full
-deploy and verification workflow.
-For the complete first-time setup path, use
-[docs/jetson-orin-first-time-setup.md](docs/jetson-orin-first-time-setup.md).
+provider matrix and per-provider constraints.
+For end-to-end setup guides, start with [docs/README.md](docs/README.md) or jump
+directly to:
+
+- [docs/linux-device-first-time-setup.md](docs/linux-device-first-time-setup.md)
+- [docs/jetson-nano-jetpack4-first-time-setup.md](docs/jetson-nano-jetpack4-first-time-setup.md)
+- [docs/jetson-orin-first-time-setup.md](docs/jetson-orin-first-time-setup.md)
 
 ## Additional Documentation
 
+- [docs/README.md](docs/README.md)
 - [docs/developer-guide.md](docs/developer-guide.md)
 - [docs/compatibility-stream-profile.md](docs/compatibility-stream-profile.md)
 - [docs/eedeviced-provider-guide.md](docs/eedeviced-provider-guide.md)
-- [docs/non-jetson-device-first-time-setup.md](docs/non-jetson-device-first-time-setup.md)
+- [docs/linux-device-first-time-setup.md](docs/linux-device-first-time-setup.md)
 - [docs/implementation-profile.md](docs/implementation-profile.md)
 - [docs/interop-smoke.md](docs/interop-smoke.md)
 - [docs/jetson-nano-jetpack4-first-time-setup.md](docs/jetson-nano-jetpack4-first-time-setup.md)
 - [docs/jetson-orin-first-time-setup.md](docs/jetson-orin-first-time-setup.md)
-- [docs/jetson-orin-device-bringup.md](docs/jetson-orin-device-bringup.md)
 - [docs/spec-enhancement-proposal.md](docs/spec-enhancement-proposal.md)
 - [docs/async-metadata-layout-plan.md](docs/async-metadata-layout-plan.md)
 

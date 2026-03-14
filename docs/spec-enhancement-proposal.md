@@ -257,11 +257,11 @@ separates:
 These enhancements were necessary to make the Rust plugin functional in this
 repository:
 
-- [eevideo-proto/compat_stream.rs](c:/devel/eevideo/crates/eevideo-proto/src/compat_stream.rs)
-- [eevideo-proto/pixel_format.rs](c:/devel/eevideo/crates/eevideo-proto/src/pixel_format.rs)
-- [eevideo-proto/assembler.rs](c:/devel/eevideo/crates/eevideo-proto/src/assembler.rs)
-- [gst-plugin-eevideo/eevideosrc](c:/devel/eevideo/crates/gst-plugin-eevideo/src/eevideosrc/imp.rs)
-- [gst-plugin-eevideo/eevideosink](c:/devel/eevideo/crates/gst-plugin-eevideo/src/eevideosink/imp.rs)
+- [eevideo-proto/compat_stream.rs](../crates/eevideo-proto/src/compat_stream.rs)
+- [eevideo-proto/pixel_format.rs](../crates/eevideo-proto/src/pixel_format.rs)
+- [eevideo-proto/assembler.rs](../crates/eevideo-proto/src/assembler.rs)
+- [gst-plugin-eevideo/eevideosrc](../crates/gst-plugin-eevideo/src/eevideosrc/imp.rs)
+- [gst-plugin-eevideo/eevideosink](../crates/gst-plugin-eevideo/src/eevideosink/imp.rs)
 
 ## Conclusion
 

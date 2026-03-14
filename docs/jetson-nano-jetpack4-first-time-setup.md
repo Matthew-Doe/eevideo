@@ -9,6 +9,13 @@ bring-up on that device. This path uses `--input pipeline`, not the built-in
 [jetson-orin-first-time-setup.md](jetson-orin-first-time-setup.md). If you need
 the provider matrix, use [eedeviced-provider-guide.md](eedeviced-provider-guide.md).
 
+For Jetson bring-up in this repo, the recommended path is building directly on
+the Nano and running `--input pipeline` with an explicit
+`nvarguscamerasrc ... ! appsink` pipeline. The built-in `argus` provider
+remains available in the CLI, but it is not currently a tested deployment path
+here. The cross-build helpers are kept as a fallback, not the recommended
+workflow.
+
 This guide assumes you already have:
 
 - JetPack 4.x / L4T 32.7.x installed on the Nano
@@ -29,7 +36,9 @@ This guide does not cover:
 - a CSI camera that works with `nvarguscamerasrc`
 - a second machine that will run `eevid` and `eeview`
 - a network path between the Nano and the host
-- this repository checked out on the build machine
+- this repository checked out on the Nano
+- this repository checked out on the host, or prebuilt `eevid` and `eeview`
+  binaries there
 
 Recommended first EEVideo bring-up:
 
@@ -76,24 +85,27 @@ Decide these values before continuing:
 - network interface name on the Nano, for example `eth0`
 - camera sensor id, usually `0` for the first sensor
 
-## Step 2: Build The EEVideo Artifacts
+## Step 2: Build The EEVideo Artifacts On The Nano
 
-On the build machine, use the Jetson cross-build path with a Nano JetPack 4.x
-sysroot:
+Build directly on the Nano for the recommended path. Cross-building with
+`cross/jetson-orin/build.sh` exists in the repo, but it is not the recommended
+Jetson bring-up flow.
+
+On the Nano, from a checkout of this repository:
 
 ```sh
-cross/jetson-orin/build.sh /absolute/path/to/jetson-sysroot
+cargo build --release -p eedeviced
 ```
 
-The outputs land under:
+The output lands under:
 
 ```text
-target/aarch64-unknown-linux-gnu/release/
+target/release/
 ```
 
-For the first EEVideo bring-up, copy these to the Nano:
+For the first EEVideo bring-up, use these local files on the Nano:
 
-- `eedeviced`
+- `target/release/eedeviced`
 - `cross/jetson-orin/systemd/eedeviced.service`
 - `cross/jetson-orin/systemd/eedeviced-launch.sh`
 - `cross/jetson-orin/systemd/eedeviced.env.example`
@@ -103,17 +115,20 @@ No Rust dependency downgrade is planned for Nano JetPack 4.x. The current
 workspace still target system GStreamer `>= 1.14`, which matches the floor this
 project already uses.
 
-## Step 3: Copy EEVideo Files To The Nano
+If you still choose to cross-build, copy the same files from the other machine
+to the Nano after the build completes.
+
+## Step 3: Install EEVideo Files On The Nano
 
 Example:
 
 ```sh
-ssh nvidia@192.168.1.50 "sudo mkdir -p /opt/eevideo /etc/eevideo && sudo chown \$USER /opt/eevideo /etc/eevideo"
-scp target/aarch64-unknown-linux-gnu/release/eedeviced nvidia@192.168.1.50:/opt/eevideo/
-scp cross/jetson-orin/systemd/eedeviced.service nvidia@192.168.1.50:/tmp/
-scp cross/jetson-orin/systemd/eedeviced-launch.sh nvidia@192.168.1.50:/tmp/
-scp cross/jetson-orin/systemd/eedeviced.env.example nvidia@192.168.1.50:/tmp/
-ssh nvidia@192.168.1.50 "sudo mv /tmp/eedeviced.service /etc/systemd/system/ && sudo mv /tmp/eedeviced-launch.sh /opt/eevideo/ && sudo mv /tmp/eedeviced.env.example /etc/eevideo/eedeviced.env && sudo chmod +x /opt/eevideo/eedeviced-launch.sh"
+sudo mkdir -p /opt/eevideo /etc/eevideo
+sudo cp target/release/eedeviced /opt/eevideo/
+sudo cp cross/jetson-orin/systemd/eedeviced.service /etc/systemd/system/
+sudo cp cross/jetson-orin/systemd/eedeviced-launch.sh /opt/eevideo/
+sudo cp cross/jetson-orin/systemd/eedeviced.env.example /etc/eevideo/eedeviced.env
+sudo chmod +x /opt/eevideo/eedeviced-launch.sh
 ```
 
 ## Step 4: Validate The CSI Pipeline Locally
@@ -138,7 +153,7 @@ Do not start with `systemd`. Run it manually once so failures are obvious.
 On the Nano:
 
 ```sh
-./eedeviced \
+./target/release/eedeviced \
   --bind 0.0.0.0:5683 \
   --advertise-address 192.168.1.50 \
   --iface eth0 \
@@ -247,6 +262,10 @@ journalctl -u eedeviced -f
 The packaged launcher script passes only the provider-specific flags required by
 `EEVIDEO_INPUT`, so Nano pipeline deployments do not inherit Orin-only
 `--sensor-id` behavior.
+
+This guide still uses `nvarguscamerasrc` inside the explicit pipeline. That is
+separate from the built-in `argus` provider, which is not currently a tested
+deployment path in this repo.
 
 ## Common Bring-Up Problems
 
