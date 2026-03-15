@@ -540,7 +540,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pipeline.by_name("display-sink").unwrap().factory().unwrap().name(),
+            pipeline
+                .by_name("display-sink")
+                .unwrap()
+                .factory()
+                .unwrap()
+                .name(),
             "fpsdisplaysink"
         );
         assert!(pipeline.by_name("display-mode-overlay").is_some());
@@ -575,7 +580,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pipeline.by_name("display-sink").unwrap().factory().unwrap().name(),
+            pipeline
+                .by_name("display-sink")
+                .unwrap()
+                .factory()
+                .unwrap()
+                .name(),
             "fakesink"
         );
         assert!(pipeline.by_name("display-mode-overlay").is_none());
@@ -609,7 +619,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pipeline.by_name("display-sink").unwrap().factory().unwrap().name(),
+            pipeline
+                .by_name("display-sink")
+                .unwrap()
+                .factory()
+                .unwrap()
+                .name(),
             "fpsdisplaysink"
         );
         assert!(pipeline.by_name("display-mode-overlay").is_none());

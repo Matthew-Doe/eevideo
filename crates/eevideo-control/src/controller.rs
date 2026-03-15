@@ -279,40 +279,21 @@ fn read_advertised_stream_mode(
     device: &DeviceConfig,
     prefix: &str,
 ) -> Result<Option<AdvertisedStreamMode>, ControlError> {
-    let Some(width) = maybe_read_stream_field(
-        client,
-        device,
-        prefix,
-        "PixelsPerLine",
-        "ppl",
-    )? else {
+    let Some(width) = maybe_read_stream_field(client, device, prefix, "PixelsPerLine", "ppl")?
+    else {
         return Ok(None);
     };
-    let Some(height) = maybe_read_stream_field(
-        client,
-        device,
-        prefix,
-        "LinesPerFrame",
-        "lpf",
-    )? else {
+    let Some(height) = maybe_read_stream_field(client, device, prefix, "LinesPerFrame", "lpf")?
+    else {
         return Ok(None);
     };
-    let Some(pixel_format_bits) = maybe_read_stream_field(
-        client,
-        device,
-        prefix,
-        "PixelFormat",
-        "bpp",
-    )? else {
+    let Some(pixel_format_bits) =
+        maybe_read_stream_field(client, device, prefix, "PixelFormat", "bpp")?
+    else {
         return Ok(None);
     };
-    let Some(fps) = maybe_read_stream_field(
-        client,
-        device,
-        prefix,
-        "FramesPerSecond",
-        "fps",
-    )? else {
+    let Some(fps) = maybe_read_stream_field(client, device, prefix, "FramesPerSecond", "fps")?
+    else {
         return Ok(None);
     };
 
