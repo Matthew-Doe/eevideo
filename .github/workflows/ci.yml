@@ -179,13 +179,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install cross toolchain and arm64 sysroot dependencies
+      - name: Install host cross toolchain
         run: |
-          sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y \
             gcc-aarch64-linux-gnu \
-            pkg-config \
+            pkg-config
+
+      - name: Install arm64 sysroot dependencies from Ubuntu Ports
+        run: |
+          sudo dpkg --add-architecture arm64
+          sudo install -d -m 0755 /etc/apt/arm64-ports.sources.list.d
+          cat <<'EOF' | sudo tee /etc/apt/arm64-ports.sources.list.d/ubuntu-ports.sources > /dev/null
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: noble noble-updates noble-backports noble-security
+          Components: main universe restricted multiverse
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo apt-get update \
+            -o Dir::Etc::sourcelist=/dev/null \
+            -o Dir::Etc::sourceparts=/etc/apt/arm64-ports.sources.list.d
+          sudo apt-get install -y \
+            -o Dir::Etc::sourcelist=/dev/null \
+            -o Dir::Etc::sourceparts=/etc/apt/arm64-ports.sources.list.d \
             libc6-dev:arm64 \
             libglib2.0-dev:arm64 \
             libgstreamer1.0-dev:arm64 \
