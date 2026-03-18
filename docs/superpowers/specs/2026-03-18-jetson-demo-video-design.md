@@ -92,8 +92,9 @@ eevid --device-uri coap://<jetson-ip>:5683 describe
 The visible output should make at least these points legible:
 
 - device identity
-- one available stream
-- supported profile or stream mode summary
+- one available stream named `stream0`
+- `compatibility-v1`
+- concrete stream mode details such as width, height, pixel format, and fps
 
 Do not linger on register listings if they make the output noisy.
 
@@ -104,7 +105,7 @@ Duration: 12 to 15 seconds
 Show the host launching:
 
 ```sh
-eeview --device-uri coap://<jetson-ip>:5683 --bind-address <host-ip> --port 5000
+eeview --device-uri coap://<jetson-ip>:5683 --bind-address <host-ip> --port 5000 --no-overlay
 ```
 
 Then cut to or reveal the live viewer window.
@@ -115,6 +116,9 @@ starting managed viewing on the host.
 
 The live scene should include visible motion so the audience immediately reads
 it as a real camera feed.
+
+Use `--no-overlay` for the recording so the payoff looks like a clean product
+demo rather than a diagnostic HUD.
 
 ### Shot 5: Closing hold
 
@@ -175,6 +179,7 @@ Before recording, confirm:
 - the host machine can discover the device reliably
 - the host `--bind-address` is the real reachable IP of the receiving NIC, not
   `127.0.0.1`
+- the host `--bind-address` is not `0.0.0.0`
 - the host IP and Jetson IP are known in advance
 - if discovery is noisy on the network, the direct device URI is prepared in
   advance
