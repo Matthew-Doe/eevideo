@@ -192,8 +192,16 @@ jobs:
       - name: Install arm64 sysroot dependencies from Ubuntu Ports
         run: |
           sudo dpkg --add-architecture arm64
-          sudo install -d -m 0755 /etc/apt/arm64-ports.sources.list.d
-          cat <<'EOF' | sudo tee /etc/apt/arm64-ports.sources.list.d/ubuntu-ports.sources > /dev/null
+          sourceparts="$(mktemp -d)"
+          cat <<'EOF' > "$sourceparts/ubuntu-archive-amd64.sources"
+          Types: deb
+          URIs: http://azure.archive.ubuntu.com/ubuntu
+          Suites: noble noble-updates noble-backports noble-security
+          Components: main universe restricted multiverse
+          Architectures: amd64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          cat <<'EOF' > "$sourceparts/ubuntu-ports-arm64.sources"
           Types: deb
           URIs: http://ports.ubuntu.com/ubuntu-ports
           Suites: noble noble-updates noble-backports noble-security
@@ -203,10 +211,10 @@ jobs:
           EOF
           sudo apt-get update \
             -o Dir::Etc::sourcelist=/dev/null \
-            -o Dir::Etc::sourceparts=/etc/apt/arm64-ports.sources.list.d
+            -o Dir::Etc::sourceparts="$sourceparts"
           sudo apt-get install -y \
             -o Dir::Etc::sourcelist=/dev/null \
-            -o Dir::Etc::sourceparts=/etc/apt/arm64-ports.sources.list.d \
+            -o Dir::Etc::sourceparts="$sourceparts" \
             libc6-dev:arm64 \
             libglib2.0-dev:arm64 \
             libgstreamer1.0-dev:arm64 \
