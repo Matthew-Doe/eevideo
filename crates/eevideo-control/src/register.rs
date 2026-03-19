@@ -9,6 +9,7 @@ use crate::coap::{
 use crate::yaml::DeviceConfig;
 
 static NEXT_MESSAGE_ID: AtomicU16 = AtomicU16::new(0x2000);
+const MAX_RESPONSE_ATTEMPTS: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RegisterReadKind {
@@ -194,41 +195,68 @@ impl RegisterClient {
             payload.unwrap_or(&[]).to_vec(),
         );
         let bytes = request.encode().map_err(RegisterError::Coap)?;
-        socket
-            .send_to(&bytes, self.device_addr)
-            .map_err(RegisterError::Io)?;
+        for attempt in 0..MAX_RESPONSE_ATTEMPTS {
+            socket
+                .send_to(&bytes, self.device_addr)
+                .map_err(RegisterError::Io)?;
 
-        let mut buffer = [0u8; 2048];
-        let (size, _) = socket.recv_from(&mut buffer).map_err(RegisterError::Io)?;
-        let response = CoapMessage::decode(&buffer[..size]).map_err(RegisterError::Coap)?;
+            let mut buffer = [0u8; 2048];
+            match socket.recv_from(&mut buffer) {
+                Ok((size, _)) => {
+                    let response =
+                        CoapMessage::decode(&buffer[..size]).map_err(RegisterError::Coap)?;
 
-        if response.message_type != CoapMessageType::Acknowledgement {
-            return Err(RegisterError::Response(format!(
-                "unexpected response type {:?}",
-                response.message_type
-            )));
-        }
-        if response.message_id != message_id {
-            return Err(RegisterError::Response(format!(
-                "response message id mismatch: expected {message_id}, got {}",
-                response.message_id
-            )));
-        }
-        if response.token != token {
-            return Err(RegisterError::Response(
-                "response token mismatch".to_string(),
-            ));
-        }
-        if response.code != CODE_CHANGED && response.code != CODE_CONTENT {
-            let description = response_code_description(response.code)
-                .map(str::to_string)
-                .unwrap_or_else(|| format!("{}.{:02}", response.code >> 5, response.code & 0x1F));
-            return Err(RegisterError::Response(format!(
-                "unexpected response code {description}"
-            )));
+                    if response.message_type != CoapMessageType::Acknowledgement {
+                        return Err(RegisterError::Response(format!(
+                            "unexpected response type {:?}",
+                            response.message_type
+                        )));
+                    }
+                    if response.message_id != message_id {
+                        return Err(RegisterError::Response(format!(
+                            "response message id mismatch: expected {message_id}, got {}",
+                            response.message_id
+                        )));
+                    }
+                    if response.token != token {
+                        return Err(RegisterError::Response(
+                            "response token mismatch".to_string(),
+                        ));
+                    }
+                    if response.code != CODE_CHANGED && response.code != CODE_CONTENT {
+                        let description = response_code_description(response.code)
+                            .map(str::to_string)
+                            .unwrap_or_else(|| {
+                                format!("{}.{:02}", response.code >> 5, response.code & 0x1F)
+                            });
+                        return Err(RegisterError::Response(format!(
+                            "unexpected response code {description}"
+                        )));
+                    }
+
+                    return Ok(response.payload);
+                }
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) && attempt + 1 < MAX_RESPONSE_ATTEMPTS =>
+                {
+                    continue;
+                }
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    return Err(RegisterError::Timeout);
+                }
+                Err(err) => return Err(RegisterError::Io(err)),
+            }
         }
 
-        Ok(response.payload)
+        Err(RegisterError::Timeout)
     }
 }
 
@@ -250,6 +278,7 @@ fn build_token(token_len: u8, message_id: u16) -> Vec<u8> {
 #[derive(Debug)]
 pub enum RegisterError {
     Io(std::io::Error),
+    Timeout,
     Coap(CoapError),
     InvalidAccess(String),
     UnknownRegister(String),
@@ -261,6 +290,7 @@ impl std::fmt::Display for RegisterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(err) => err.fmt(f),
+            Self::Timeout => f.write_str("timed out waiting for register response"),
             Self::Coap(err) => err.fmt(f),
             Self::InvalidAccess(message) => f.write_str(message),
             Self::UnknownRegister(name) => write!(f, "unknown register {name}"),
@@ -314,6 +344,38 @@ mod tests {
         addr
     }
 
+    fn spawn_retry_register_server(payload: Vec<u8>) -> SocketAddr {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let addr = server.local_addr().unwrap();
+
+        thread::spawn(move || {
+            let mut buffer = [0u8; 2048];
+            let mut attempt = 0usize;
+            loop {
+                let (size, peer) = server.recv_from(&mut buffer).unwrap();
+                attempt += 1;
+                if attempt == 1 {
+                    continue;
+                }
+
+                let request = CoapMessage::decode(&buffer[..size]).unwrap();
+                let response = CoapMessage::new(
+                    CoapMessageType::Acknowledgement,
+                    CODE_CONTENT,
+                    request.message_id,
+                    request.token,
+                    Vec::<CoapOption>::new(),
+                    payload,
+                );
+                let bytes = response.encode().unwrap();
+                server.send_to(&bytes, peer).unwrap();
+                break;
+            }
+        });
+
+        addr
+    }
+
     #[test]
     fn register_access_option_matches_upstream_packing() {
         let access = RegisterAccess::read(RegisterReadKind::String, 1);
@@ -325,6 +387,15 @@ mod tests {
         let addr = spawn_register_server(vec![0x12, 0x34, 0x56, 0x78]);
         let client = RegisterClient::new("127.0.0.1:0".parse().unwrap(), addr)
             .with_timeout(Duration::from_millis(250));
+
+        assert_eq!(client.read_u32(0x1000).unwrap(), 0x1234_5678);
+    }
+
+    #[test]
+    fn read_u32_retries_after_initial_timeout() {
+        let addr = spawn_retry_register_server(vec![0x12, 0x34, 0x56, 0x78]);
+        let client = RegisterClient::new("127.0.0.1:0".parse().unwrap(), addr)
+            .with_timeout(Duration::from_millis(50));
 
         assert_eq!(client.read_u32(0x1000).unwrap(), 0x1234_5678);
     }

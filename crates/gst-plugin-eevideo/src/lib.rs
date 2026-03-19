@@ -3,6 +3,8 @@ mod control;
 mod eevideosink;
 mod eevideosrc;
 
+pub use eevideo_control;
+
 use gst::glib;
 use gstreamer as gst;
 

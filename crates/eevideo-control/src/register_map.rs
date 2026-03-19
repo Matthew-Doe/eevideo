@@ -290,6 +290,10 @@ pub(crate) fn register_error(error: RegisterError) -> ControlError {
             };
             ControlError::new(kind, err.to_string())
         }
+        RegisterError::Timeout => ControlError::new(
+            ControlErrorKind::Timeout,
+            "timed out waiting for register response",
+        ),
         RegisterError::Coap(err) => {
             ControlError::new(ControlErrorKind::Connection, err.to_string())
         }

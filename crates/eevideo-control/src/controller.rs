@@ -177,7 +177,7 @@ impl DeviceController {
         let device = self.backend.load_or_create_device_config(&endpoint)?;
         let client = RegisterClient::new(
             local_bind_addr(
-                bind_address,
+                bind_address.or(self.backend.config().bind_address.as_deref()),
                 self.backend.config().local_port,
                 endpoint.addr,
             ),

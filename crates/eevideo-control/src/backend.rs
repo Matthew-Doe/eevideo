@@ -28,6 +28,7 @@ const FEATURE_TABLE_ADDR: u32 = 16;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CoapRegisterBackendConfig {
     pub interface_name: Option<String>,
+    pub bind_address: Option<String>,
     pub discovery_timeout: Duration,
     pub request_timeout: Duration,
     pub yaml_root: Option<PathBuf>,
@@ -38,6 +39,7 @@ impl Default for CoapRegisterBackendConfig {
     fn default() -> Self {
         Self {
             interface_name: None,
+            bind_address: None,
             discovery_timeout: Duration::from_secs(3),
             request_timeout: Duration::from_secs(1),
             yaml_root: None,
@@ -117,7 +119,11 @@ impl CoapRegisterBackend {
 
     fn introspect_device(&self, endpoint: &DeviceEndpoint) -> Result<DeviceConfig, ControlError> {
         let client = RegisterClient::new(
-            local_bind_addr(None, self.config.local_port, endpoint.addr),
+            local_bind_addr(
+                self.config.bind_address.as_deref(),
+                self.config.local_port,
+                endpoint.addr,
+            ),
             endpoint.addr,
         )
         .with_timeout(self.config.request_timeout);

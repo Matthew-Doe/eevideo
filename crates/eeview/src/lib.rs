@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
-use eevideo_control::{
+use gsteevideo::eevideo_control::{
     AdvertisedStreamMode, CoapRegisterBackendConfig, ControlTarget, ControlTransportKind,
     DeviceController, DeviceDescription,
 };
@@ -60,6 +60,13 @@ struct EncoderSpec {
     mux_pad_template: &'static str,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SourceStats {
+    frames_received: u64,
+    frames_dropped: u64,
+    packet_anomalies: u64,
+}
+
 const ENCODER_SPECS: &[EncoderSpec] = &[
     EncoderSpec {
         kind: EncoderKind::Av1,
@@ -96,6 +103,7 @@ pub fn run(cli: Cli) -> Result<()> {
 
     let controller = DeviceController::new(CoapRegisterBackendConfig {
         interface_name: cli.iface.clone(),
+        bind_address: Some(cli.bind_address.clone()),
         discovery_timeout: Duration::from_millis(cli.timeout_ms),
         request_timeout: Duration::from_millis(cli.timeout_ms),
         yaml_root: cli.yaml_root.clone(),
@@ -130,48 +138,50 @@ pub fn run(cli: Cli) -> Result<()> {
     })
     .context("failed to install Ctrl+C handler")?;
 
-    pipeline
-        .set_state(gst::State::Playing)
-        .context("failed to start pipeline")?;
+    let run_result = (|| -> Result<()> {
+        pipeline
+            .set_state(gst::State::Playing)
+            .map_err(|_| pipeline_start_error(&bus))?;
 
-    loop {
-        if interrupt_rx.try_recv().is_ok() {
-            let _ = pipeline.send_event(gst::event::Eos::new());
-            wait_for_terminal_bus_message(&bus, Duration::from_secs(5))?;
-            break;
-        }
+        loop {
+            if interrupt_rx.try_recv().is_ok() {
+                let _ = pipeline.send_event(gst::event::Eos::new());
+                wait_for_terminal_bus_message(&bus, Duration::from_secs(5))?;
+                break;
+            }
 
-        if let Some(message) = bus.timed_pop(gst::ClockTime::from_mseconds(200)) {
-            match message.view() {
-                gst::MessageView::Eos(..) => break,
-                gst::MessageView::Error(err) => {
-                    let src = err
-                        .src()
-                        .map(|src| src.path_string().to_string())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let debug = err.debug().unwrap_or_default();
-                    bail!("pipeline error from {src}: {} ({debug})", err.error());
+            if let Some(message) = bus.timed_pop(gst::ClockTime::from_mseconds(200)) {
+                match message.view() {
+                    gst::MessageView::Eos(..) => break,
+                    gst::MessageView::Error(err) => return Err(anyhow!(format_bus_error(err))),
+                    _ => {}
                 }
-                _ => {}
             }
         }
-    }
 
-    pipeline
+        Ok(())
+    })();
+
+    let stop_result = pipeline
         .set_state(gst::State::Null)
-        .context("failed to stop pipeline")?;
-    Ok(())
+        .map(|_| ())
+        .context("failed to stop pipeline");
+    let source_stats = read_source_stats(&pipeline);
+    eprintln!("eeview source stats: {}", format_source_stats(source_stats));
+
+    finalize_run_result(run_result, stop_result, source_stats)
 }
 
 fn build_pipeline(
     cli: &Cli,
-    backend: eevideo_control::SharedControlBackend,
+    backend: gsteevideo::eevideo_control::SharedControlBackend,
     target: ControlTarget,
     recording_spec: Option<EncoderSpec>,
     overlay_text: Option<&str>,
 ) -> Result<gst::Pipeline> {
     let pipeline = gst::Pipeline::default();
     let src = gst::ElementFactory::make("eevideosrc")
+        .name("eeview-source")
         .property("address", &cli.bind_address)
         .property("port", cli.port)
         .property("timeout-ms", cli.source_timeout_ms)
@@ -416,10 +426,78 @@ pub fn suggested_record_path(kind: EncoderKind, base: &Path) -> PathBuf {
     base.with_extension(extension)
 }
 
+fn pipeline_start_error(bus: &gst::Bus) -> anyhow::Error {
+    if let Some(message) = bus.timed_pop_filtered(
+        gst::ClockTime::from_seconds(1),
+        &[gst::MessageType::Error],
+    ) {
+        if let gst::MessageView::Error(err) = message.view() {
+            return anyhow!("failed to start pipeline: {}", format_bus_error(err));
+        }
+    }
+
+    anyhow!("failed to start pipeline: element failed to change its state")
+}
+
+fn format_bus_error(err: &gst::message::Error) -> String {
+    let src = err
+        .src()
+        .map(|src| src.path_string().to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let debug = err.debug().unwrap_or_default();
+    if debug.is_empty() {
+        format!("pipeline error from {src}: {}", err.error())
+    } else {
+        format!("pipeline error from {src}: {} ({debug})", err.error())
+    }
+}
+
+fn read_source_stats(pipeline: &gst::Pipeline) -> SourceStats {
+    let Some(source) = pipeline.by_name("eeview-source") else {
+        return SourceStats::default();
+    };
+
+    SourceStats {
+        frames_received: source.property("frames-received"),
+        frames_dropped: source.property("frames-dropped"),
+        packet_anomalies: source.property("packet-anomalies"),
+    }
+}
+
+fn format_source_stats(stats: SourceStats) -> String {
+    format!(
+        "frames-received={} frames-dropped={} packet-anomalies={}",
+        stats.frames_received, stats.frames_dropped, stats.packet_anomalies
+    )
+}
+
+fn finalize_run_result(
+    run_result: Result<()>,
+    stop_result: Result<(), anyhow::Error>,
+    source_stats: SourceStats,
+) -> Result<()> {
+    match (run_result, stop_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(err), Ok(())) => Err(err.context(format!(
+            "source stats: {}",
+            format_source_stats(source_stats)
+        ))),
+        (Ok(()), Err(stop_err)) => Err(stop_err.context(format!(
+            "source stats: {}",
+            format_source_stats(source_stats)
+        ))),
+        (Err(err), Err(stop_err)) => Err(anyhow!(
+            "{err:#}\nadditionally failed to stop pipeline: {stop_err:#}\nsource stats: {}",
+            format_source_stats(source_stats)
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use anyhow::anyhow;
     use clap::Parser;
-    use eevideo_control::{
+    use gsteevideo::eevideo_control::{
         default_control_backend, AdvertisedStream, AdvertisedStreamMode, ControlTarget,
         ControlTransportKind, DeviceDescription, DeviceSummary,
     };
@@ -428,8 +506,40 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        advertised_stream_overlay_text, build_pipeline, suggested_record_path, Cli, EncoderKind,
+        advertised_stream_overlay_text, build_pipeline, finalize_run_result, format_source_stats,
+        suggested_record_path, Cli, EncoderKind, SourceStats,
     };
+
+    #[test]
+    fn formats_source_stats_as_a_single_line() {
+        assert_eq!(
+            format_source_stats(SourceStats {
+                frames_received: 12,
+                frames_dropped: 3,
+                packet_anomalies: 7,
+            }),
+            "frames-received=12 frames-dropped=3 packet-anomalies=7"
+        );
+    }
+
+    #[test]
+    fn finalize_run_result_keeps_primary_error_and_stop_error() {
+        let err = finalize_run_result(
+            Err(anyhow!("pipeline error")),
+            Err(anyhow!("failed to stop pipeline")),
+            SourceStats {
+                frames_received: 4,
+                frames_dropped: 2,
+                packet_anomalies: 1,
+            },
+        )
+        .unwrap_err();
+
+        let rendered = format!("{err:#}");
+        assert!(rendered.contains("pipeline error"));
+        assert!(rendered.contains("additionally failed to stop pipeline"));
+        assert!(rendered.contains("frames-received=4"));
+    }
 
     fn init_gst() {
         static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
@@ -494,7 +604,7 @@ mod tests {
                 device_address: "127.0.0.1".to_string(),
             },
             capabilities: Default::default(),
-            device: eevideo_control::DeviceConfig::default(),
+            device: gsteevideo::eevideo_control::DeviceConfig::default(),
             streams: vec![AdvertisedStream {
                 name: "stream0".to_string(),
                 mode: Some(AdvertisedStreamMode {

@@ -255,6 +255,7 @@ pub fn run(cli: Cli) -> Result<String> {
 fn controller(cli: &Cli) -> DeviceController {
     DeviceController::new(CoapRegisterBackendConfig {
         interface_name: cli.iface.clone(),
+        bind_address: None,
         discovery_timeout: Duration::from_millis(cli.timeout_ms),
         request_timeout: Duration::from_millis(cli.timeout_ms),
         yaml_root: cli.yaml_root.clone(),
