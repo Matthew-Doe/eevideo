@@ -25,6 +25,7 @@ assert_not_contains() {
 assert_contains "$workflow_contents" "- name: Prepare arm64 sysroot"
 assert_contains "$workflow_contents" "bash cross/jetson-orin/prepare-sysroot.sh /tmp/jetson-sysroot"
 assert_contains "$workflow_contents" "run: cross/jetson-orin/build.sh /tmp/jetson-sysroot"
+assert_contains "$workflow_contents" "bash cross/jetson-orin/test-build-config.sh"
 
 assert_not_contains "$workflow_contents" "sudo dpkg --add-architecture arm64"
 assert_not_contains "$workflow_contents" "sourceparts=\"$(mktemp -d)\""

@@ -149,3 +149,8 @@ find "$DOWNLOAD_DIR" -maxdepth 1 -name '*.deb' -print0 |
   while IFS= read -r -d '' deb; do
     dpkg-deb -x "$deb" "$SYSROOT"
   done
+
+# Ubuntu's merged-/usr layout expects these runtime paths to resolve via /lib.
+mkdir -p "$SYSROOT/lib"
+ln -sfn ../usr/lib/aarch64-linux-gnu "$SYSROOT/lib/aarch64-linux-gnu"
+ln -sfn ../usr/lib/ld-linux-aarch64.so.1 "$SYSROOT/lib/ld-linux-aarch64.so.1"

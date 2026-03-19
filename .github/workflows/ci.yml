@@ -137,8 +137,10 @@ jobs:
       - name: Run launcher tests
         run: bash cross/jetson-orin/systemd/test-eedeviced-launch.sh
 
-      - name: Run CI workflow guard tests
-        run: bash cross/jetson-orin/test-ci-arm64-sources.sh
+      - name: Run Jetson CI guard tests
+        run: |
+          bash cross/jetson-orin/test-ci-arm64-sources.sh
+          bash cross/jetson-orin/test-build-config.sh
 
   gst-integration:
     runs-on: ubuntu-24.04

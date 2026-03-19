@@ -22,5 +22,8 @@ assert_file() {
 assert_file "$SYSROOT_DIR/usr/lib/aarch64-linux-gnu/pkgconfig/glib-2.0.pc"
 assert_file "$SYSROOT_DIR/usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-1.0.pc"
 assert_file "$SYSROOT_DIR/usr/lib/aarch64-linux-gnu/pkgconfig/gstreamer-base-1.0.pc"
+assert_file "$SYSROOT_DIR/lib/aarch64-linux-gnu/libm.so.6"
+assert_file "$SYSROOT_DIR/lib/aarch64-linux-gnu/libmvec.so.1"
+assert_file "$SYSROOT_DIR/lib/ld-linux-aarch64.so.1"
 
 echo "sysroot preparation test passed"
